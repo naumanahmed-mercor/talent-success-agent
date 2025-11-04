@@ -82,8 +82,10 @@ def build_graph():
         
         if next_node == "response":
             return "response"  # Validation passed, send response
+        elif next_node == "draft":
+            return "draft"  # Validation failed on first attempt, retry draft
         elif next_node == "escalate":
-            return "escalate"  # Validation failed, escalate
+            return "escalate"  # Validation failed on second attempt, escalate
         else:
             return "end"
     
@@ -174,6 +176,7 @@ def build_graph():
         route_from_validate,
         {
             "response": "response",
+            "draft": "draft",
             "escalate": "escalate",
             "end": END
         }

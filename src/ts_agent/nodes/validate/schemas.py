@@ -23,4 +23,5 @@ class ValidateData(BaseModel):
     overall_passed: bool = Field(..., description="Whether validation passed")
     validation_note_added: bool = Field(False, description="Whether note was added to Intercom")
     escalation_reason: Optional[str] = Field(None, description="Reason for escalation if validation failed")
-    next_action: str = Field(..., description="Next action: 'response' or 'escalate'")
+    next_action: str = Field(..., description="Next action: 'response', 'draft', or 'escalate'")
+    retry_count: int = Field(0, description="Number of times validation has been retried")

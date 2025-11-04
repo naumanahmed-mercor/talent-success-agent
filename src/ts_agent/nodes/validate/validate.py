@@ -3,8 +3,9 @@ Validate node for response validation.
 
 This node sends the draft response to a validation endpoint and:
 1. Adds validation results as a note to the Intercom conversation
-2. Escalates if validation fails (overall_passed = false)
-3. Routes to response node if validation passes
+2. Loops back to draft once if validation fails (giving draft a chance to fix issues)
+3. Escalates if validation fails on the second attempt
+4. Routes to response node if validation passes
 """
 
 import os
@@ -27,13 +28,27 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     print("🔍 Validate Node: Validating draft response...")
     
-    # Initialize validate data using Pydantic model (stored at state level, not in hops)
+    # Get max retries from state (default: 1)
+    max_validation_retries = state.get("max_validation_retries", 1)
+    
+    # Get existing validation array if available (for retry tracking)
+    existing_validations = state.get("validate", [])
+    if not isinstance(existing_validations, list):
+        existing_validations = []
+    
+    # Determine current retry count based on number of previous validations
+    current_retry_count = len(existing_validations)
+    
+    print(f"📊 Validation attempt {current_retry_count + 1}/{max_validation_retries + 1}")
+    
+    # Initialize validate data using Pydantic model (will be appended to array)
     validate_data = ValidateData(
         validation_response=None,
         overall_passed=False,
         validation_note_added=False,
         escalation_reason=None,
-        next_action="escalate"
+        next_action="escalate",
+        retry_count=current_retry_count
     )
 
     try:
@@ -115,15 +130,24 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             state["next_node"] = "response"
             print("✅ Validation passed - routing to response node")
         else:
-            validate_data.next_action = "escalate"
-            state["next_node"] = "escalate"
-            
-            # Simple escalation reason
-            escalation_reason = "Validation failed - see validation note for details"
-            validate_data.escalation_reason = escalation_reason
-            state["escalation_reason"] = escalation_reason
-            
-            print(f"❌ Validation failed - escalating")
+            # Check if we can still retry
+            if current_retry_count < max_validation_retries:
+                # Retry available - loop back to draft with validation feedback
+                validate_data.next_action = "draft"
+                state["next_node"] = "draft"
+                
+                print(f"⚠️  Validation failed (attempt {current_retry_count + 1}/{max_validation_retries + 1}) - looping back to draft with feedback")
+            else:
+                # No more retries - escalate
+                validate_data.next_action = "escalate"
+                state["next_node"] = "escalate"
+                
+                # Simple escalation reason
+                escalation_reason = f"Validation failed after {max_validation_retries + 1} attempts - see validation notes for details"
+                validate_data.escalation_reason = escalation_reason
+                state["escalation_reason"] = escalation_reason
+                
+                print(f"❌ Validation failed (attempt {current_retry_count + 1}/{max_validation_retries + 1}) - escalating")
 
     except Exception as e:
         error_msg = f"Validation error: {str(e)}"
@@ -134,9 +158,12 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         state["next_node"] = "escalate"
         state["escalation_reason"] = error_msg
 
-    # Store validate data at state level (convert to dict for state)
-    state["validate"] = validate_data.model_dump()
+    # Append validate data to array (convert to dict for state)
+    if "validate" not in state or not isinstance(state["validate"], list):
+        state["validate"] = []
+    state["validate"].append(validate_data.model_dump())
     
     print(f"🎯 Validate node completed - next action: {validate_data.next_action}")
+    print(f"📊 Total validation attempts: {len(state['validate'])}")
     
     return state

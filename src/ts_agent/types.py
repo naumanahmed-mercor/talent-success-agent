@@ -74,9 +74,12 @@ class State(TypedDict, total=False):
     max_actions: Optional[int]  # Maximum allowed actions per flow (default: 1)
     actions_taken: Optional[int]  # Number of actions taken so far
     
+    # Validation Management
+    max_validation_retries: Optional[int]  # Maximum allowed validation retries (default: 1)
+    
     # Post-Loop Nodes (Draft, Validate, Escalate, Response)
     draft: Optional[Dict[str, Any]]  # Draft node data
-    validate: Optional[Dict[str, Any]]  # Validate node data
+    validate: Optional[List[Dict[str, Any]]]  # Array of validate node data (one per attempt)
     escalate: Optional[Dict[str, Any]]  # Escalate node data
     response_delivery: Optional[Dict[str, Any]]  # Response node delivery data
     finalize: Optional[Dict[str, Any]]  # Finalize node data

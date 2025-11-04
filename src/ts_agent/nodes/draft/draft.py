@@ -24,6 +24,17 @@ def draft_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     print("📝 Draft Node: Generating response...")
     
+    # Check if this is a retry after validation failure
+    # Get validation feedback from the latest validation attempt (if any)
+    validation_feedback = None
+    validate_attempts = state.get("validate", [])
+    if validate_attempts and isinstance(validate_attempts, list) and len(validate_attempts) > 0:
+        latest_validation = validate_attempts[-1]
+        if latest_validation.get("next_action") == "draft":
+            # This is a retry - use the validation response as feedback
+            validation_feedback = latest_validation.get("validation_response")
+            print(f"🔄 Retrying draft with validation feedback from attempt {len(validate_attempts)}")
+    
     # Extract data from state
     tool_data = state.get("tool_data", {})
     docs_data = state.get("docs_data", {})
@@ -58,7 +69,8 @@ def draft_node(state: Dict[str, Any]) -> Dict[str, Any]:
             formatted_context["user_details"],
             tool_data,
             docs_data,
-            coverage_reasoning
+            coverage_reasoning,
+            validation_feedback
         )
         
         generation_time = (time.time() - start_time) * 1000
@@ -113,7 +125,8 @@ def _generate_response(
     user_details: str,
     tool_data: Dict[str, Any],
     docs_data: Dict[str, Any],
-    coverage_reasoning: str = None
+    coverage_reasoning: str = None,
+    validation_feedback: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Generate a response using LLM based on accumulated data.
@@ -124,6 +137,7 @@ def _generate_response(
         tool_data: Accumulated tool data
         docs_data: Accumulated docs data
         coverage_reasoning: Reasoning from latest coverage analysis (optional)
+        validation_feedback: Validation feedback from a failed validation attempt (optional)
         
     Returns:
         Generated response with metadata
@@ -134,7 +148,7 @@ def _generate_response(
     context_data = _prepare_context_data(tool_data, docs_data)
     
     # Create system prompt with conversation context and user details
-    system_prompt = _create_system_prompt(conversation_history, user_details, context_data, coverage_reasoning)
+    system_prompt = _create_system_prompt(conversation_history, user_details, context_data, coverage_reasoning, validation_feedback)
     
     # Generate response with structured output
     from .schemas import DraftResponse
@@ -264,7 +278,7 @@ def _prepare_context_data(tool_data: Dict[str, Any], docs_data: Dict[str, Any]) 
     return context
 
 
-def _create_system_prompt(conversation_history: str, user_details: str, context_data: Dict[str, Any], coverage_reasoning: str = None) -> str:
+def _create_system_prompt(conversation_history: str, user_details: str, context_data: Dict[str, Any], coverage_reasoning: str = None, validation_feedback: Dict[str, Any] = None) -> str:
     """
     Create system prompt for response generation.
     
@@ -273,6 +287,7 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         user_details: Formatted user details string
         context_data: Prepared context data
         coverage_reasoning: Reasoning from latest coverage analysis (optional)
+        validation_feedback: Validation feedback from a failed validation attempt (optional)
         
     Returns:
         System prompt string
@@ -283,6 +298,10 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
     # Add coverage reasoning at the top if available
     if coverage_reasoning:
         data_summary.append(f"Coverage Analysis: {coverage_reasoning}")
+    
+    # Add validation feedback at the top if this is a retry
+    if validation_feedback:
+        data_summary.append(f"⚠️ VALIDATION FEEDBACK (RETRY ATTEMPT): Your previous response failed validation. Please address these issues:\n{json.dumps(validation_feedback, indent=2)}")
     
     if context_data["tool_data"]:
         data_summary.append(f"Tool Data: {len(context_data['tool_data'])} tools executed")
