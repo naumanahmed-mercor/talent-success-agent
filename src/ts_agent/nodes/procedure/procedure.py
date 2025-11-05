@@ -11,6 +11,7 @@ from ts_agent.types import State
 from ts_agent.llm import planner_llm
 from src.mcp.factory import create_mcp_client
 from src.clients.intercom import IntercomClient
+from src.clients.mongodb import MongoDBClient
 from src.clients.prompts import get_prompt, PROMPT_NAMES
 from .schemas import (
     ProcedureData,
@@ -78,6 +79,13 @@ def procedure_node(state: State) -> State:
             
             # Store selected procedure at root level
             state["selected_procedure"] = selected_procedure.model_dump()
+            
+            # Log procedure selection to MongoDB
+            _log_procedure_selection_to_mongodb(
+                state=state,
+                selected_procedure=selected_procedure,
+                query=query_result.query
+            )
         else:
             print("ℹ️  No procedure selected")
             state["selected_procedure"] = None
@@ -406,4 +414,36 @@ Evaluate these procedures and determine if any perfectly match this scenario."""
     ])
     
     return response
+
+
+def _log_procedure_selection_to_mongodb(
+    state: State,
+    selected_procedure: SelectedProcedure,
+    query: str
+) -> None:
+    """
+    Log procedure selection to MongoDB.
+    
+    Args:
+        state: Current state with conversation_id
+        selected_procedure: The selected procedure
+        query: The search query used
+    """
+    try:
+        conversation_id = state.get("conversation_id")
+        if not conversation_id:
+            print("⚠️  Cannot log procedure: missing conversation_id")
+            return
+        
+        # Use context manager to ensure proper connection cleanup
+        with MongoDBClient() as mongo_client:
+            mongo_client.log_procedure_selection(
+                procedure_id=selected_procedure.id,
+                conversation_id=conversation_id
+            )
+            print(f"📊 Logged procedure selection to MongoDB: {selected_procedure.id}")
+            
+    except Exception as e:
+        print(f"⚠️  Failed to log procedure to MongoDB: {e}")
+        # Don't fail the procedure node if logging fails
 
