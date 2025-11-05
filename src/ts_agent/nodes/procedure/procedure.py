@@ -4,6 +4,7 @@ Procedure node for retrieving and evaluating internal procedures from RAG store.
 
 import os
 import time
+import requests
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -11,7 +12,6 @@ from ts_agent.types import State
 from ts_agent.llm import planner_llm
 from src.mcp.factory import create_mcp_client
 from src.clients.intercom import IntercomClient
-from src.clients.mongodb import MongoDBClient
 from src.clients.prompts import get_prompt, PROMPT_NAMES
 from .schemas import (
     ProcedureData,
@@ -80,8 +80,8 @@ def procedure_node(state: State) -> State:
             # Store selected procedure at root level
             state["selected_procedure"] = selected_procedure.model_dump()
             
-            # Log procedure selection to MongoDB
-            _log_procedure_selection_to_mongodb(
+            # Log procedure selection to API
+            _log_procedure_selection_to_api(
                 state=state,
                 selected_procedure=selected_procedure,
                 query=query_result.query
@@ -416,13 +416,13 @@ Evaluate these procedures and determine if any perfectly match this scenario."""
     return response
 
 
-def _log_procedure_selection_to_mongodb(
+def _log_procedure_selection_to_api(
     state: State,
     selected_procedure: SelectedProcedure,
     query: str
 ) -> None:
     """
-    Log procedure selection to MongoDB.
+    Log procedure selection to API endpoint.
     
     Args:
         state: Current state with conversation_id
@@ -435,15 +435,32 @@ def _log_procedure_selection_to_mongodb(
             print("⚠️  Cannot log procedure: missing conversation_id")
             return
         
-        # Use context manager to ensure proper connection cleanup
-        with MongoDBClient() as mongo_client:
-            mongo_client.log_procedure_selection(
-                procedure_id=selected_procedure.id,
-                conversation_id=conversation_id
-            )
-            print(f"📊 Logged procedure selection to MongoDB: {selected_procedure.id}")
+        # Get MCP auth token for API authentication
+        mcp_auth_token = os.getenv("MCP_AUTH_TOKEN")
+        if not mcp_auth_token:
+            print("⚠️  Cannot log procedure: MCP_AUTH_TOKEN not configured")
+            return
+        
+        # Get MCP base URL
+        mcp_base_url = os.getenv("MCP_BASE_URL", "https://aws.api.mercor.com")
+        
+        # Make API request to log procedure selection
+        url = f"{mcp_base_url}/talent-success/procedures/logs"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {mcp_auth_token}"
+        }
+        payload = {
+            "procedure_id": selected_procedure.id,
+            "conversation_id": conversation_id
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        response.raise_for_status()
+        
+        print(f"📊 Logged procedure selection to API: {selected_procedure.id}")
             
     except Exception as e:
-        print(f"⚠️  Failed to log procedure to MongoDB: {e}")
+        print(f"⚠️  Failed to log procedure to API: {e}")
         # Don't fail the procedure node if logging fails
 
