@@ -58,18 +58,21 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if not response_text:
             raise ValueError("No response text found to validate")
 
-        # Get validation endpoint and API key from environment
-        validation_endpoint = os.getenv("VALIDATION_ENDPOINT")
-        if not validation_endpoint:
-            raise ValueError("VALIDATION_ENDPOINT environment variable is required")
+        # Get MCP configuration from environment
+        mcp_base_url = os.getenv("MCP_BASE_URL")
+        if not mcp_base_url:
+            raise ValueError("MCP_BASE_URL environment variable is required")
         
-        validation_api_key = os.getenv("VALIDATION_API_KEY")
-        if not validation_api_key:
-            raise ValueError("VALIDATION_API_KEY environment variable is required")
+        mcp_auth_token = os.getenv("MCP_AUTH_TOKEN")
+        if not mcp_auth_token:
+            raise ValueError("MCP_AUTH_TOKEN environment variable is required")
+        
+        # Construct validation endpoint URL
+        validation_endpoint = f"{mcp_base_url.rstrip('/')}/talent-success/melvin-validation/validate"
 
         print(f"📤 Sending response to validation endpoint: {validation_endpoint}")
         
-        # Send validation request with x-api-key authentication
+        # Send validation request with Bearer token authentication
         validation_payload = {"reply": response_text}
         
         response = requests.post(
@@ -78,7 +81,7 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             timeout=180,
             headers={
                 "Content-Type": "application/json",
-                "x-api-key": validation_api_key
+                "Authorization": f"Bearer {mcp_auth_token}"
             }
         )
         

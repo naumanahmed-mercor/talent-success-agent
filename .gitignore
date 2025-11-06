@@ -59,6 +59,9 @@ test_results/
 comprehensive_test_results_*.json
 single_test_result_*.json
 
+# Local test runs
+local_runs/
+
 # Temporary files
 *.tmp
 *.temp

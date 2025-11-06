@@ -106,9 +106,12 @@ def _determine_escalation_source(state: Dict[str, Any]) -> str:
         return "draft"
     
     # Check if validate node failed
-    validate_data = state.get("validate", {})
-    if validate_data and not validate_data.get("overall_passed", True):
-        return "validate"
+    validate_data = state.get("validate", [])
+    if validate_data and isinstance(validate_data, list) and len(validate_data) > 0:
+        # Get the most recent validation attempt
+        last_validation = validate_data[-1]
+        if not last_validation.get("overall_passed", True):
+            return "validate"
 
     # Check if coverage node escalated
     hops = state.get("hops", [])

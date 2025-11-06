@@ -20,21 +20,26 @@ cp env.example .env
 
 ### 2. Run the Agent
 
-#### Multi-Message Conversation
-```python
-from src.ts_agent.runner import run_agent
-from src.ts_agent.types import Message
+#### Local Testing (Recommended)
+```bash
+# Using Makefile (easiest)
+make run_local CONV_ID=215471618006513
 
-# Create conversation history
-messages = [
-    {"role": "user", "content": "What applications do I have?"},
-    {"role": "assistant", "content": "I can help you check your applications. Let me look that up."},
-    {"role": "user", "content": "Show me the status of my software engineer applications"}
-]
+# With full conversation
+make run_local CONV_ID=215471618006513 FULL_CONV=true
 
-result = run_agent(messages, user_email="user@example.com")
-print(result["response"])
+# With actual Intercom writes (careful!)
+make run_local CONV_ID=215471618006513 NO_DRY_RUN=true
+
+# Or use the script directly
+PYTHONPATH=src:$PYTHONPATH python scripts/run_local.py 215471618006513 --help
 ```
+
+**Features:**
+- ✅ Dry run mode by default (no writes to Intercom)
+- ✅ First message only mode (faster testing)
+- ✅ Automatic state dumping to `local_runs/` folder
+- ✅ Clean summary output
 
 #### LangGraph Studio
 ```bash

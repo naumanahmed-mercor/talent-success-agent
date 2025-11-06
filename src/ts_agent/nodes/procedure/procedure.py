@@ -430,6 +430,10 @@ def _log_procedure_selection_to_api(
         query: The search query used
     """
     try:
+        # Skip logging in dry run mode
+        if os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes"):
+            return
+        
         conversation_id = state.get("conversation_id")
         if not conversation_id:
             print("⚠️  Cannot log procedure: missing conversation_id")
