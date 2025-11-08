@@ -41,19 +41,23 @@ class IntercomClient:
     API_VERSION = "2.14"
     TIMEOUT_SECONDS = 30
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, dry_run: Optional[bool] = None):
         """
         Initialize the Intercom client.
 
         Args:
             api_key: Intercom API key for authentication
+            dry_run: Optional override for dry-run mode. If None, reads from DRY_RUN env var
         """
         import os
         
         self.api_key = api_key
         
-        # Check for dry-run mode from environment variable
-        self.dry_run = os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes")
+        # Check for dry-run mode: parameter overrides environment variable
+        if dry_run is not None:
+            self.dry_run = dry_run
+        else:
+            self.dry_run = os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes")
         
         if not self.api_key:
             logger.warning("IntercomClient: No API key provided")
@@ -499,6 +503,20 @@ class IntercomClient:
         if not re.match(r"^[a-zA-Z0-9_\[\] -]+$", attribute_name):
             raise ValueError(f"Invalid attribute name '{attribute_name}'. Contains invalid characters.")
 
+        # Dry run mode - skip actual update and validation
+        if self.dry_run:
+            logger.info(
+                f"[DRY RUN] Would update custom attribute on conversation {conversation_id}: "
+                f"{attribute_name} = {attribute_value}"
+            )
+            # Return a mock successful response
+            return {
+                "type": "conversation",
+                "id": conversation_id,
+                "custom_attributes": {attribute_name: attribute_value},
+                "dry_run": True
+            }
+
         # First, get the conversation to check if it exists and get current custom attributes
         conversation = self.get_conversation(conversation_id)
         if not conversation:
@@ -518,20 +536,6 @@ class IntercomClient:
             logger.info(f"Adding new custom attribute '{attribute_name}' to conversation {conversation_id}")
         else:
             logger.info(f"Updating existing custom attribute '{attribute_name}' on conversation {conversation_id}")
-
-        # Dry run mode - skip actual update
-        if self.dry_run:
-            logger.info(
-                f"[DRY RUN] Would update custom attribute on conversation {conversation_id}: "
-                f"{attribute_name} = {attribute_value}"
-            )
-            # Return a mock successful response
-            return {
-                "type": "conversation",
-                "id": conversation_id,
-                "custom_attributes": {attribute_name: attribute_value},
-                "dry_run": True
-            }
 
         # Prepare the update payload - only pass the specific attribute we want to update
         payload = {"custom_attributes": {attribute_name: attribute_value}}

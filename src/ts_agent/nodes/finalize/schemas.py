@@ -13,3 +13,4 @@ class FinalizeData(BaseModel):
     conversation_snoozed: bool = Field(False, description="Whether conversation was snoozed")
     snooze_duration_seconds: int = Field(300, description="Snooze duration in seconds (default: 5 minutes)")
     error: Optional[str] = Field(None, description="Error message if finalization failed")
+    webhook_posted: Optional[bool] = Field(None, description="Whether response was posted to webhook (test mode only)")

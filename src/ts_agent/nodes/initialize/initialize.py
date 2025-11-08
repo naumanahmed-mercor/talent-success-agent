@@ -15,11 +15,15 @@ def initialize_node(state: State) -> State:
     """
     Initialize the state by fetching conversation data from Intercom and MCP tools.
     
+    Supports two modes:
+    - Normal mode: Fetches all data from Intercom
+    - Test mode: Uses provided messages, sets dry_run=True, posts results to MCP webhook
+    
     Args:
-        state: Current state with conversation_id
+        state: Current state with conversation_id and optional test mode inputs
         
     Returns:
-        Updated state with conversation data and available tools
+            Updated state with conversation data and available tools
     """
     # Get conversation ID and Melvin admin ID FIRST (before any potential failures)
     conversation_id = state.get("conversation_id")
@@ -48,6 +52,20 @@ def initialize_node(state: State) -> State:
     if melvin_admin_id:
         state["melvin_admin_id"] = melvin_admin_id
     
+    # Check for test mode
+    mode = state.get("mode")
+    is_test_mode = mode == "test"
+    
+    # If test mode, set dry_run flag
+    if is_test_mode:
+        state["dry_run"] = True
+        print(f"🧪 Test mode enabled - dry_run set to True")
+    
+    # Log procedure_id if provided (already in state from inputs)
+    procedure_id = state.get("procedure_id")
+    if procedure_id:
+        print(f"📋 Procedure ID provided: {procedure_id}")
+    
     # Only initialize if not already done
     if "available_tools" not in state or state["available_tools"] is None:
         try:
@@ -59,31 +77,57 @@ def initialize_node(state: State) -> State:
             if not intercom_api_key:
                 raise ValueError("INTERCOM_API_KEY environment variable is required")
             
-            intercom_client = IntercomClient(intercom_api_key)
+            # Pass dry_run to IntercomClient if in test mode
+            dry_run = state.get("dry_run", False)
+            intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
             
-            # Fetch conversation data (messages + email)
-            conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)
-            
-            # Validate: Either messages or subject must be present
-            has_messages = conversation_data.get("messages") and len(conversation_data["messages"]) > 0
-            has_subject = conversation_data.get("subject") and conversation_data["subject"].strip()
-            
-            if not has_messages and not has_subject:
-                raise ValueError(f"No messages or subject found in conversation {conversation_id}")
-            
-            # Update state with conversation data
-            state["messages"] = conversation_data.get("messages", [])
-            state["user_details"] = {
-                "name": conversation_data.get("user_name"),
-                "email": conversation_data.get("user_email")
-            }
-            state["subject"] = conversation_data.get("subject") or ""  # Default to empty string if None
-            
-            print(f"✅ Using {len(state['messages'])} message(s) from Intercom")
-            print(f"✅ User name: {conversation_data.get('user_name', 'Not found')}")
-            print(f"✅ User email: {conversation_data.get('user_email', 'Not found')}")
-            print(f"✅ Subject: {conversation_data.get('subject', 'None')}")
-            print(f"✅ Melvin admin ID: {melvin_admin_id}")
+            # Handle test mode vs normal mode
+            if is_test_mode and "messages" in state:
+                # Test mode: Use provided messages, but fetch user details from Intercom
+                print(f"🧪 Test mode: Using provided messages, fetching user details from Intercom")
+                
+                # Fetch conversation data to get user details and subject
+                conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)
+                
+                # Use provided messages instead of fetched ones
+                state["messages"] = state.get("messages", [])
+                state["user_details"] = {
+                    "name": conversation_data.get("user_name"),
+                    "email": conversation_data.get("user_email")
+                }
+                state["subject"] = conversation_data.get("subject") or ""
+                
+                print(f"✅ Using {len(state['messages'])} provided message(s)")
+                print(f"✅ User name: {conversation_data.get('user_name', 'Not found')}")
+                print(f"✅ User email: {conversation_data.get('user_email', 'Not found')}")
+                print(f"✅ Subject: {conversation_data.get('subject', 'Test Conversation')}")
+                print(f"✅ Melvin admin ID: {melvin_admin_id}")
+            else:
+                # Normal mode: Fetch all data from Intercom
+                print(f"📞 Fetching conversation data from Intercom: {conversation_id}")
+                
+                conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)
+                
+                # Validate: Either messages or subject must be present
+                has_messages = conversation_data.get("messages") and len(conversation_data["messages"]) > 0
+                has_subject = conversation_data.get("subject") and conversation_data["subject"].strip()
+                
+                if not has_messages and not has_subject:
+                    raise ValueError(f"No messages or subject found in conversation {conversation_id}")
+                
+                # Update state with conversation data
+                state["messages"] = conversation_data.get("messages", [])
+                state["user_details"] = {
+                    "name": conversation_data.get("user_name"),
+                    "email": conversation_data.get("user_email")
+                }
+                state["subject"] = conversation_data.get("subject") or ""  # Default to empty string if None
+                
+                print(f"✅ Using {len(state['messages'])} message(s) from Intercom")
+                print(f"✅ User name: {conversation_data.get('user_name', 'Not found')}")
+                print(f"✅ User email: {conversation_data.get('user_email', 'Not found')}")
+                print(f"✅ Subject: {conversation_data.get('subject', 'None')}")
+                print(f"✅ Melvin admin ID: {melvin_admin_id}")
             
             # Initialize MCP client
             print("🔌 Initializing MCP client...")
@@ -128,9 +172,9 @@ def initialize_node(state: State) -> State:
             initialize_data = InitializeData(
                 conversation_id=conversation_id,
                 messages_count=len(state["messages"]),
-                user_name=conversation_data.get("user_name"),
-                user_email=conversation_data.get("user_email"),
-                subject=conversation_data.get("subject"),
+                user_name=state.get("user_details", {}).get("name"),
+                user_email=state.get("user_details", {}).get("email"),
+                subject=state.get("subject"),
                 tools_count=len(available_tools),
                 melvin_admin_id=melvin_admin_id,
                 timestamp=state["timestamp"],

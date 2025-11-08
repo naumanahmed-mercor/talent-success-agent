@@ -53,6 +53,11 @@ class State(TypedDict, total=False):
     melvin_admin_id: Optional[str]  # Melvin bot admin ID for Intercom actions
     timestamp: Optional[str]
     
+    # Test Mode Configuration
+    mode: Optional[str]  # Execution mode: "test" for dry-run testing
+    dry_run: Optional[bool]  # If True, skip all Intercom write operations
+    procedure_id: Optional[str]  # Direct procedure ID (bypasses search in test mode)
+    
     # MCP Integration
     mcp_client: Optional[Any]  # MCP client instance
     available_tools: Optional[List[Dict[str, Any]]]  # Available tools from MCP server

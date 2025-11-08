@@ -27,10 +27,13 @@ def procedure_node(state: State) -> State:
     Retrieve and evaluate procedures from RAG store.
     
     Steps:
-    1. Generate a query using LLM based on user's messages
-    2. Fetch top-k results from procedure RAG endpoint
-    3. Evaluate results using LLM to find matching procedure
-    4. Store selected procedure in state if match found
+    1. Check if procedure_id is provided in state (test mode)
+       - If yes, fetch procedure by ID
+       - If no, generate query and search
+    2. If searching: Generate a query using LLM based on user's messages
+    3. Fetch top-k results from procedure RAG endpoint (or single by ID)
+    4. Evaluate results using LLM to find matching procedure
+    5. Store selected procedure in state if match found
     
     Args:
         state: Current state with messages and user details
@@ -41,6 +44,49 @@ def procedure_node(state: State) -> State:
     try:
         print("📚 Starting procedure retrieval...")
         
+        # Check if procedure_id is provided (test mode)
+        procedure_id = state.get("procedure_id")
+        
+        if procedure_id:
+            # Test mode: Fetch procedure by ID directly
+            print(f"📋 Fetching procedure by ID: {procedure_id}")
+            
+            selected_result = _fetch_procedure_by_id(procedure_id)
+            
+            if selected_result:
+                selected_procedure = SelectedProcedure(
+                    id=selected_result.id,
+                    title=selected_result.title,
+                    content=selected_result.content,
+                    reasoning=f"Procedure selected by ID: {procedure_id}",
+                    relevance_score=selected_result.relevance_score
+                )
+                print(f"✅ Found procedure by ID: {selected_procedure.title or selected_procedure.id}")
+                
+                # Store selected procedure at root level
+                state["selected_procedure"] = selected_procedure.model_dump()
+                
+                # Note: Skip logging to API for procedures selected by ID (test mode)
+                
+                # Store procedure data
+                procedure_data = ProcedureData(
+                    query=f"Direct fetch by ID: {procedure_id}",
+                    query_reasoning="Procedure ID provided in test mode",
+                    top_k_results=[selected_result],
+                    selected_procedure=selected_procedure,
+                    evaluation_reasoning=f"Procedure selected by ID: {procedure_id}",
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    success=True,
+                    error=None
+                )
+                state["procedure_node"] = procedure_data.model_dump()
+                
+                return state
+            else:
+                print(f"❌ Procedure with ID {procedure_id} not found - continuing with normal search")
+                # Continue with normal search flow
+                
+        # Normal mode: Search for procedures
         # Get user messages
         messages = state.get("messages", [])
         if not messages:
@@ -264,6 +310,85 @@ def _add_procedure_note_to_intercom(
     except Exception as e:
         print(f"⚠️  Failed to post procedure note to Intercom: {e}")
         # Don't fail the procedure node if note posting fails
+
+
+def _fetch_procedure_by_id(procedure_id: str) -> Optional[ProcedureResult]:
+    """
+    Fetch a single procedure by ID from MCP API.
+    
+    Args:
+        procedure_id: The procedure ID to fetch
+        
+    Returns:
+        ProcedureResult object or None if not found
+    """
+    try:
+        # Get MCP configuration from environment
+        mcp_base_url = os.getenv("MCP_BASE_URL")
+        mcp_auth_token = os.getenv("MCP_AUTH_TOKEN")
+        
+        if not mcp_base_url or not mcp_auth_token:
+            raise ValueError("MCP_BASE_URL and MCP_AUTH_TOKEN must be set")
+        
+        # Make GET request to fetch procedure by ID
+        url = f"{mcp_base_url}/talent-success/procedures/get"
+        headers = {
+            "Authorization": f"Bearer {mcp_auth_token}",
+            "Content-Type": "application/json"
+        }
+        params = {"id": procedure_id}
+        
+        print(f"📡 Fetching procedure by ID from MCP API: {procedure_id}")
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        
+        if response.status_code == 404:
+            print(f"❌ Procedure not found: {procedure_id}")
+            return None
+        
+        response.raise_for_status()
+        procedure_data = response.json()
+        
+        # Parse the procedure data into ProcedureResult
+        content_parts = []
+        
+        # Add description
+        if "description" in procedure_data:
+            content_parts.append(f"Description: {procedure_data['description']}")
+        
+        # Add tools required
+        if "tools_required" in procedure_data and procedure_data["tools_required"]:
+            tools_str = ", ".join(procedure_data["tools_required"])
+            content_parts.append(f"\nTools Required: {tools_str}")
+        
+        # Add steps
+        if "steps" in procedure_data and procedure_data["steps"]:
+            content_parts.append("\nSteps:")
+            for i, step in enumerate(procedure_data["steps"], 1):
+                content_parts.append(f"{i}. {step}")
+        
+        # Add notes if present
+        if "notes" in procedure_data and procedure_data["notes"]:
+            content_parts.append(f"\nNotes:\n{procedure_data['notes']}")
+        
+        content = "\n".join(content_parts)
+        
+        result = ProcedureResult(
+            id=procedure_data.get("id", procedure_id),
+            title=procedure_data.get("title", ""),
+            content=content,
+            metadata=procedure_data.get("metadata", {}),
+            relevance_score=1.0  # Direct fetch, so perfect relevance
+        )
+        
+        print(f"✅ Successfully fetched procedure: {result.title or result.id}")
+        return result
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to fetch procedure by ID: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error parsing procedure data: {e}")
+        return None
 
 
 def _fetch_procedures_from_mcp(query: str, top_k: int = 5) -> List[ProcedureResult]:
