@@ -19,15 +19,13 @@ def _validate_and_sanitize_plan(
     available_tools: List[Dict[str, Any]], 
     verified_email: str,
     conversation_id: str
-) -> Plan:
+) -> tuple[Plan, List[Dict[str, Any]]]:
     """
     Validate tool calls against tool schemas and sanitize parameters.
     
     Injects verified values from state:
     - user_email: Replaces any email parameter with verified email from Intercom
     - conversation_id: Injects conversation_id for action tools that need it
-    
-    Invalid tool calls are skipped with a warning instead of failing the entire plan.
     
     Args:
         plan: Generated plan from LLM
@@ -36,13 +34,15 @@ def _validate_and_sanitize_plan(
         conversation_id: Conversation ID from state
         
     Returns:
-        Validated and sanitized plan (with invalid tool calls removed)
+        Tuple of (validated_plan, validation_errors)
+        - validated_plan: Plan with only valid tool calls
+        - validation_errors: List of validation errors with details
     """
     # Create a lookup map for tools
     tools_map = {tool["name"]: tool for tool in available_tools}
     
     validated_tool_calls = []
-    skipped_count = 0
+    validation_errors = []
     
     for i, tool_call in enumerate(plan.tool_calls, 1):
         tool_name = tool_call.tool_name
@@ -50,12 +50,17 @@ def _validate_and_sanitize_plan(
         # 1. Validate tool exists
         if tool_name not in tools_map:
             available_names = ", ".join(tools_map.keys())
-            logger.warning(
-                f"⚠️  Tool call {i}: Tool '{tool_name}' not found. Skipping. "
-                f"Available tools: {available_names}"
-            )
-            print(f"   ⚠️  Skipping invalid tool: {tool_name} (not found)")
-            skipped_count += 1
+            error_msg = f"Tool '{tool_name}' not found. Available tools: {available_names}"
+            logger.warning(f"⚠️  Tool call {i}: {error_msg}")
+            print(f"   ⚠️  Invalid tool: {tool_name} (not found)")
+            validation_errors.append({
+                "tool_call_index": i,
+                "tool_name": tool_name,
+                "parameters": tool_call.parameters,
+                "reasoning": tool_call.reasoning,
+                "error_type": "tool_not_found",
+                "error_message": error_msg
+            })
             continue
         
         tool_schema = tools_map[tool_name]
@@ -78,9 +83,17 @@ def _validate_and_sanitize_plan(
                 injection_map
             )
         except Exception as e:
-            logger.warning(f"   ⚠️  Skipping tool {tool_name}: Parameter sanitization failed: {e}")
-            print(f"   ⚠️  Skipping tool {tool_name}: {e}")
-            skipped_count += 1
+            error_msg = f"Parameter sanitization failed: {str(e)}"
+            logger.warning(f"   ⚠️  Tool {tool_name}: {error_msg}")
+            print(f"   ⚠️  Invalid params for {tool_name}: {e}")
+            validation_errors.append({
+                "tool_call_index": i,
+                "tool_name": tool_name,
+                "parameters": tool_call.parameters,
+                "reasoning": tool_call.reasoning,
+                "error_type": "sanitization_failed",
+                "error_message": error_msg
+            })
             continue
         
         # 3. Validate parameters against tool's input schema
@@ -88,11 +101,17 @@ def _validate_and_sanitize_plan(
             try:
                 validate(instance=sanitized_params, schema=input_schema)
             except ValidationError as e:
-                logger.warning(
-                    f"⚠️  Tool call {i} ({tool_name}): Parameter validation failed - {e.message}. Skipping."
-                )
-                print(f"   ⚠️  Skipping tool {tool_name}: Invalid parameters ({e.message})")
-                skipped_count += 1
+                error_msg = f"Parameter validation failed: {e.message}"
+                logger.warning(f"⚠️  Tool call {i} ({tool_name}): {error_msg}")
+                print(f"   ⚠️  Invalid params for {tool_name}: {e.message}")
+                validation_errors.append({
+                    "tool_call_index": i,
+                    "tool_name": tool_name,
+                    "parameters": tool_call.parameters,
+                    "reasoning": tool_call.reasoning,
+                    "error_type": "schema_validation_failed",
+                    "error_message": error_msg
+                })
                 continue
         
         # Create validated tool call with sanitized params
@@ -104,15 +123,15 @@ def _validate_and_sanitize_plan(
         )
         validated_tool_calls.append(validated_tool_call)
     
-    # Log summary if any tools were skipped
-    if skipped_count > 0:
-        logger.info(f"Validation complete: {len(validated_tool_calls)} valid, {skipped_count} skipped")
+    # Log summary
+    if validation_errors:
+        logger.info(f"Validation complete: {len(validated_tool_calls)} valid, {len(validation_errors)} invalid")
     
-    # Return new plan with validated tool calls
+    # Return new plan with validated tool calls and validation errors
     return Plan(
         reasoning=plan.reasoning,
         tool_calls=validated_tool_calls
-    )
+    ), validation_errors
 
 
 def _sanitize_tool_params(
@@ -222,9 +241,6 @@ def plan_node(state: State) -> State:
         # Get selected procedure from state (if any)
         selected_procedure = state.get("selected_procedure")
         
-        # Generate plan using LLM
-        plan = _generate_plan(plan_request, available_tools, selected_procedure)
-        
         # Get verified email from Intercom (source of truth)
         user_details = state.get("user_details", {})
         verified_email = user_details.get("email", "")
@@ -232,8 +248,84 @@ def plan_node(state: State) -> State:
         # Get conversation_id from state
         conversation_id = state.get("conversation_id", "")
         
-        # Validate and sanitize the plan (check tool schemas, inject verified parameters)
-        validated_plan = _validate_and_sanitize_plan(plan, available_tools, verified_email, conversation_id)
+        # Generate plan using LLM (with retry logic for validation errors)
+        max_retries = 1
+        validation_errors = None
+        previous_valid_plan = None
+        
+        for attempt in range(max_retries + 1):
+            # Generate plan (pass validation errors from previous attempt if retrying)
+            plan = _generate_plan(
+                plan_request, 
+                available_tools, 
+                selected_procedure,
+                validation_errors=validation_errors if attempt > 0 else None
+            )
+            
+            # If this is a retry, merge the newly fixed tool calls with the previous valid ones
+            if attempt > 0 and previous_valid_plan and validation_errors:
+                logger.info(f"Merging {len(plan.tool_calls)} fixed tool calls with {len(previous_valid_plan.tool_calls)} valid tool calls from previous attempt")
+                
+                # Get indices of failed tool calls
+                failed_indices = {err.get("tool_call_index") for err in validation_errors}
+                
+                # Rebuild the tool calls list: keep valid ones, replace failed ones
+                from .schemas import ToolCall, Plan as PlanSchema
+                merged_tool_calls = []
+                
+                # Track which fixed tool calls we've used (by tool name)
+                fixed_tool_map = {tc.tool_name: tc for tc in plan.tool_calls}
+                used_fixed_tools = set()
+                
+                # Iterate through original plan and merge
+                for idx, original_tc in enumerate(previous_valid_plan.tool_calls, 1):
+                    if idx in failed_indices:
+                        # This was a failed call - replace with fixed version if available
+                        if original_tc.tool_name in fixed_tool_map:
+                            merged_tool_calls.append(fixed_tool_map[original_tc.tool_name])
+                            used_fixed_tools.add(original_tc.tool_name)
+                            logger.info(f"Replaced failed {original_tc.tool_name} with fixed version")
+                        else:
+                            logger.warning(f"No fixed version found for {original_tc.tool_name}, skipping")
+                    else:
+                        # This was valid - keep it
+                        merged_tool_calls.append(original_tc)
+                
+                # Add any new fixed tools that weren't replacements
+                for tool_name, fixed_tc in fixed_tool_map.items():
+                    if tool_name not in used_fixed_tools:
+                        merged_tool_calls.append(fixed_tc)
+                        logger.info(f"Added new fixed {tool_name}")
+                
+                # Create merged plan
+                plan = PlanSchema(
+                    reasoning=f"{previous_valid_plan.reasoning} [Retry: Fixed {len(validation_errors)} tool call(s)]",
+                    tool_calls=merged_tool_calls
+                )
+                logger.info(f"Merged plan has {len(merged_tool_calls)} total tool calls")
+            
+            # Validate and sanitize the plan (check tool schemas, inject verified parameters)
+            validated_plan, validation_errors = _validate_and_sanitize_plan(
+                plan, available_tools, verified_email, conversation_id
+            )
+            
+            # If no validation errors, we're done
+            if not validation_errors:
+                if attempt > 0:
+                    print(f"   ✅ Plan validation succeeded on retry {attempt}")
+                break
+            
+            # If this was the last attempt, accept the plan with invalid calls dropped
+            if attempt >= max_retries:
+                print(f"   ⚠️  Plan still has {len(validation_errors)} invalid tool calls after {max_retries} retry. Dropping them.")
+                logger.warning(f"Plan validation failed after {max_retries} retry. Dropping {len(validation_errors)} invalid tool calls.")
+                break
+            
+            # Otherwise, prepare for retry with validation errors
+            # Save the original plan (with all tool calls) before retry
+            previous_valid_plan = plan
+            print(f"   🔄 Plan has {len(validation_errors)} invalid tool calls. Retrying with error details...")
+            logger.info(f"Retrying plan generation (attempt {attempt + 2}/{max_retries + 1}) with validation errors")
         
         # Separate tool calls by type (gather vs action)
         gather_tool_calls = []
@@ -294,7 +386,12 @@ def plan_node(state: State) -> State:
     return state
 
 
-def _generate_plan(request: PlanRequest, available_tools: List[Dict[str, Any]], selected_procedure: Dict[str, Any] = None) -> Plan:
+def _generate_plan(
+    request: PlanRequest, 
+    available_tools: List[Dict[str, Any]], 
+    selected_procedure: Dict[str, Any] = None,
+    validation_errors: List[Dict[str, Any]] = None
+) -> Plan:
     """
     Generate an execution plan using LLM.
     
@@ -302,6 +399,7 @@ def _generate_plan(request: PlanRequest, available_tools: List[Dict[str, Any]], 
         request: Plan request with conversation history and context
         available_tools: List of available tools from MCP server
         selected_procedure: Optional selected procedure from RAG store
+        validation_errors: Optional list of validation errors from previous attempt (for retry)
         
     Returns:
         Generated execution plan
@@ -318,18 +416,39 @@ def _generate_plan(request: PlanRequest, available_tools: List[Dict[str, Any]], 
     # Format procedure if available
     procedure_text = format_procedure_for_prompt(selected_procedure)
     
+    # Format validation errors if this is a retry
+    validation_errors_text = _format_validation_errors(validation_errors, available_tools) if validation_errors else ""
+    
     # Get prompt from LangSmith
     prompt_template_text = get_prompt(PROMPT_NAMES["PLAN_NODE"])
     
     # Format the prompt with variables
     formatted_tools = _format_tools_for_prompt(available_tools)
-    prompt = prompt_template_text.format(
-        conversation_history=conversation_history,
-        user_details=user_details,
-        procedure=procedure_text,
-        context_info=context_info,
-        available_tools=formatted_tools
-    )
+    
+    # Inject validation errors into the prompt if present
+    if validation_errors_text:
+        # For retry: Skip available_tools to save tokens - we already show the schema in validation errors
+        prompt = prompt_template_text.format(
+            conversation_history=conversation_history,
+            user_details=user_details,
+            procedure=procedure_text,
+            context_info=context_info + "\n\n" + validation_errors_text,
+            available_tools="(Tool schemas omitted for retry - see validation errors above for required parameters)"
+        )
+    else:
+        # For first attempt: Include all available tools
+        prompt = prompt_template_text.format(
+            conversation_history=conversation_history,
+            user_details=user_details,
+            procedure=procedure_text,
+            context_info=context_info,
+            available_tools=formatted_tools
+        )
+    
+    # Log the full prompt for debugging (only to logger, not console)
+    logger.debug(f"Plan prompt length: {len(prompt)} characters")
+    if validation_errors:
+        logger.debug(f"Retry prompt with {len(validation_errors)} validation errors")
         
     # Get LLM response with structured output
     # Use function_calling method since Plan schema contains Dict[str, Any] 
@@ -361,6 +480,109 @@ def _format_tools_for_prompt(tools: List[Dict[str, Any]]) -> str:
         formatted.append(tool_str)
     
     return "\n\n".join(formatted)
+
+
+def _format_validation_errors(
+    validation_errors: List[Dict[str, Any]], 
+    available_tools: List[Dict[str, Any]]
+) -> str:
+    """
+    Format validation errors for the LLM prompt to help it fix the issues.
+    Only asks the LLM to regenerate the failed tool calls.
+    
+    Args:
+        validation_errors: List of validation error dictionaries
+        available_tools: List of available tools with their schemas
+        
+    Returns:
+        Formatted string describing validation errors
+    """
+    if not validation_errors:
+        return ""
+    
+    # Create tool lookup map
+    tools_map = {tool["name"]: tool for tool in available_tools}
+    
+    error_lines = [
+        "=" * 80,
+        "⚠️ VALIDATION ERRORS FROM PREVIOUS ATTEMPT",
+        "=" * 80,
+        f"The following {len(validation_errors)} tool call(s) had validation errors.",
+        "Please regenerate ONLY these failed tool calls with the corrections.\n"
+    ]
+    
+    for i, error in enumerate(validation_errors, 1):
+        tool_name = error.get("tool_name", "unknown")
+        error_type = error.get("error_type", "unknown")
+        error_message = error.get("error_message", "")
+        reasoning = error.get("reasoning", "")
+        parameters = error.get("parameters", {})
+        tool_call_index = error.get("tool_call_index", 0)
+        
+        error_lines.append(f"FAILED TOOL {i}: '{tool_name}'")
+        error_lines.append(f"-" * 40)
+        error_lines.append(f"Your Original Reasoning: {reasoning}")
+        error_lines.append(f"Error: {error_message}")
+        
+        import json
+        error_lines.append(f"Your Invalid Parameters: {json.dumps(parameters, indent=2)}")
+        
+        # Add the tool's required schema to help the model
+        if tool_name in tools_map:
+            tool_schema = tools_map[tool_name]
+            input_schema = tool_schema.get("inputSchema", {})
+            required_params = input_schema.get("required", [])
+            properties = input_schema.get("properties", {})
+            
+            if required_params:
+                error_lines.append(f"\n✅ REQUIRED Parameters for '{tool_name}':")
+                for param in required_params:
+                    param_schema = properties.get(param, {})
+                    param_type = param_schema.get("type", "unknown")
+                    param_desc = param_schema.get("description", "No description")
+                    error_lines.append(f"  • {param} ({param_type}): {param_desc}")
+            
+            # Show optional parameters too
+            optional_params = [p for p in properties.keys() if p not in required_params]
+            if optional_params:
+                error_lines.append(f"\n📋 Optional Parameters:")
+                for param in optional_params:
+                    param_schema = properties.get(param, {})
+                    param_type = param_schema.get("type", "unknown")
+                    param_desc = param_schema.get("description", "No description")
+                    error_lines.append(f"  • {param} ({param_type}): {param_desc}")
+        
+        error_lines.append("")  # Blank line between errors
+    
+    # Create example with actual first failed tool name for clarity
+    example_tool_name = validation_errors[0].get("tool_name", "tool_name") if validation_errors else "tool_name"
+    example_params = '        "param_name": "..."'
+    
+    error_lines.extend([
+        "=" * 80,
+        "INSTRUCTIONS:",
+        f"Generate {len(validation_errors)} corrected tool call(s) - one for each failed tool above.",
+        "Provide the REQUIRED parameters with appropriate values based on the context.",
+        "The valid tool calls from your previous attempt will be kept automatically.",
+        "",
+        "Example corrected response format:",
+        "{",
+        '  "reasoning": "...",',
+        '  "tool_calls": [',
+        '    {',
+        f'      "tool_name": "{example_tool_name}",',
+        '      "parameters": {',
+        example_params,
+        '      },',
+        '      "reasoning": "..."',
+        '    }',
+        '  ]',
+        "}",
+        "=" * 80,
+        ""
+    ])
+    
+    return "\n".join(error_lines)
 
 
 def _build_context_from_hops(hops_array: List[Dict[str, Any]], state: State) -> Dict[str, Any]:
