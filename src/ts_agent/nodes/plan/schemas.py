@@ -8,10 +8,13 @@ from pydantic import BaseModel, Field, validator
 
 class ToolCall(BaseModel):
     """Schema for a single tool call in the plan."""
-    model_config = {"extra": "forbid"}  # Required for OpenAI structured output
+    model_config = {"extra": "ignore"}  # Silently drop extra fields for robustness
     
     tool_name: str = Field(..., description="Name of the tool to call")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters to pass to the tool")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="Dictionary containing ALL tool-specific parameters (e.g., user_email, query, threshold). Do NOT put parameters at top level."
+    )
     reasoning: str = Field(..., description="Why this tool call is needed")
 
 
@@ -26,7 +29,7 @@ class PlanData(TypedDict, total=False):
 
 class Plan(BaseModel):
     """Schema for the agent's execution plan with structured tool calls."""
-    model_config = {"extra": "forbid"}  # Required for OpenAI structured output
+    model_config = {"extra": "ignore"}  # Silently drop extra fields for robustness
     
     reasoning: str = Field(..., description="Why this plan was created and overall strategy")
     tool_calls: List[ToolCall] = Field(..., description="List of tool calls to execute in order")
