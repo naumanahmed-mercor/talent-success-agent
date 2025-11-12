@@ -144,9 +144,9 @@ def initialize_node(state: State) -> State:
                 print(f"✅ Subject: {conversation_data.get('subject', 'None')}")
                 print(f"✅ Melvin admin ID: {melvin_admin_id}")
             
-            # Initialize MCP client
+            # Initialize MCP client with mode-based auth token
             print("🔌 Initializing MCP client...")
-            mcp_client = create_mcp_client()
+            mcp_client = create_mcp_client(mode=mode)
             
             # Fetch available tools from MCP server
             print("🔧 Fetching available tools from MCP server...")

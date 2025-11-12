@@ -74,7 +74,9 @@ def action_node(state: State) -> State:
     
     try:
         # Create MCP client (don't store in state due to serialization issues)
-        mcp_client = create_mcp_client()
+        # Get mode from state for auth token selection
+        mode = state.get("mode")
+        mcp_client = create_mcp_client(mode=mode)
         
         # Execute the action tool
         start_time = time.time()
