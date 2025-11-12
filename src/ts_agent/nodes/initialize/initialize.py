@@ -15,12 +15,13 @@ def initialize_node(state: State) -> State:
     """
     Initialize the state by fetching conversation data from Intercom and MCP tools.
     
-    Supports two modes:
-    - Normal mode: Fetches all data from Intercom
-    - Test mode: Uses provided messages, sets dry_run=True, posts results to MCP webhook
+    Data source behavior (checks in order):
+    1. If messages and user_details are in state: Uses them directly
+    2. If only messages are in state: Uses messages, fetches user_details from Intercom
+    3. Otherwise: Fetches all data from Intercom
     
     Args:
-        state: Current state with conversation_id and optional test mode inputs
+        state: Current state with conversation_id and optional data overrides
         
     Returns:
             Updated state with conversation data and available tools
@@ -52,12 +53,12 @@ def initialize_node(state: State) -> State:
     if melvin_admin_id:
         state["melvin_admin_id"] = melvin_admin_id
     
-    # Check for test mode
+    # Check for test mode (automatically sets dry_run)
     mode = state.get("mode")
     is_test_mode = mode == "test"
     
-    # If test mode, set dry_run flag
-    if is_test_mode:
+    # If test mode, set dry_run flag (unless explicitly overridden)
+    if is_test_mode and "dry_run" not in state:
         state["dry_run"] = True
         print(f"🧪 Test mode enabled - dry_run set to True")
     
@@ -81,39 +82,43 @@ def initialize_node(state: State) -> State:
             dry_run = state.get("dry_run", False)
             intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
             
-            # Handle test mode vs normal mode
-            if is_test_mode and "messages" in state:
-                # Test mode: Use provided messages and user details if available
-                print(f"🧪 Test mode: Using provided messages")
-                
-                # Check if user_details were provided in state
-                if "user_details" in state and state["user_details"]:
-                    # Use provided user details
-                    print(f"✅ Using provided user details")
-                    user_details = state["user_details"]
-                    state["subject"] = state.get("subject", "Test Conversation")
-                else:
-                    # Fetch conversation data to get user details and subject
-                    print(f"📞 Fetching user details from Intercom")
-                    conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)
-                    
-                    user_details = {
-                        "name": conversation_data.get("user_name"),
-                        "email": conversation_data.get("user_email")
-                    }
-                    state["user_details"] = user_details
-                    state["subject"] = conversation_data.get("subject") or ""
-                
-                # Use provided messages
-                state["messages"] = state.get("messages", [])
+            # Check if messages and user_details are already provided in state
+            has_messages = "messages" in state and state["messages"]
+            has_user_details = "user_details" in state and state["user_details"]
+            
+            # If both messages and user_details are provided, use them
+            if has_messages and has_user_details:
+                print(f"✅ Using provided messages and user details from state")
+                state["subject"] = state.get("subject", "")
+                user_details = state["user_details"]
                 
                 print(f"✅ Using {len(state['messages'])} provided message(s)")
                 print(f"✅ User name: {user_details.get('name') or 'None'}")
                 print(f"✅ User email: {user_details.get('email') or 'None'}")
-                print(f"✅ Subject: {state.get('subject', 'Test Conversation')}")
+                print(f"✅ Subject: {state.get('subject', 'None')}")
                 print(f"✅ Melvin admin ID: {melvin_admin_id}")
+            
+            # If only messages are provided, fetch user details from Intercom
+            elif has_messages and not has_user_details:
+                print(f"✅ Using provided messages from state")
+                print(f"📞 Fetching user details from Intercom")
+                conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)
+                
+                user_details = {
+                    "name": conversation_data.get("user_name"),
+                    "email": conversation_data.get("user_email")
+                }
+                state["user_details"] = user_details
+                state["subject"] = conversation_data.get("subject") or ""
+                
+                print(f"✅ Using {len(state['messages'])} provided message(s)")
+                print(f"✅ User name: {user_details.get('name') or 'None'}")
+                print(f"✅ User email: {user_details.get('email') or 'None'}")
+                print(f"✅ Subject: {state.get('subject', 'None')}")
+                print(f"✅ Melvin admin ID: {melvin_admin_id}")
+            
             else:
-                # Normal mode: Fetch all data from Intercom
+                # Fetch all data from Intercom
                 print(f"📞 Fetching conversation data from Intercom: {conversation_id}")
                 
                 conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)

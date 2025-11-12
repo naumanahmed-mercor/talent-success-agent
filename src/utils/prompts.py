@@ -62,24 +62,37 @@ def format_conversation_history(messages: List[Dict[str, Any]], subject: Optiona
     return "\n".join(parts)
 
 
-def format_user_details(name: Optional[str] = None, email: Optional[str] = None) -> str:
+def format_user_details(user_details: Optional[Dict[str, Any]] = None, name: Optional[str] = None, email: Optional[str] = None) -> str:
     """
     Format user details for LLM prompts.
     
+    Dynamically formats all fields in user_details dict. If user_details is not provided,
+    falls back to legacy name/email parameters for backward compatibility.
+    
     Args:
-        name: User's name
-        email: User's email
+        user_details: Dictionary of user details (any fields)
+        name: User's name (legacy, for backward compatibility)
+        email: User's email (legacy, for backward compatibility)
         
     Returns:
-        Formatted user details string
+        Formatted user details string with all available fields
     """
     parts = []
     
-    if name:
-        parts.append(f"Name: {name}")
+    # If user_details dict is provided, format all fields dynamically
+    if user_details:
+        for key, value in user_details.items():
+            if value:  # Only include non-empty values
+                # Format the key nicely (e.g., "user_id" -> "User ID")
+                formatted_key = key.replace("_", " ").title()
+                parts.append(f"{formatted_key}: {value}")
     
-    if email:
-        parts.append(f"Email: {email}")
+    # Fallback to legacy parameters if user_details not provided
+    elif name or email:
+        if name:
+            parts.append(f"Name: {name}")
+        if email:
+            parts.append(f"Email: {email}")
     
     if not parts:
         parts.append("User details: Not available")
@@ -110,13 +123,12 @@ def build_conversation_and_user_context(state: Dict[str, Any]) -> Dict[str, str]
     if not has_messages and not has_subject:
         raise ValueError("No conversation messages or subject found in state")
     
+    # Pass entire user_details dict for dynamic formatting
     user_details = state.get("user_details", {})
-    user_name = user_details.get("name") if user_details else None
-    user_email = user_details.get("email") if user_details else None
     
     return {
         "conversation_history": format_conversation_history(messages, subject),
-        "user_details": format_user_details(user_name, user_email)
+        "user_details": format_user_details(user_details=user_details)
     }
 
 
