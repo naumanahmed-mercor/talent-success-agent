@@ -314,8 +314,9 @@ def _post_action_note_to_intercom(
             print("⚠️  Cannot post action note: INTERCOM_API_KEY not found")
             return
         
-        # Initialize Intercom client
-        intercom_client = IntercomClient(intercom_api_key)
+        # Initialize Intercom client with dry_run from state
+        dry_run = state.get("dry_run", False)
+        intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
         
         # Build note content
         status_emoji = "✅" if success else "❌"

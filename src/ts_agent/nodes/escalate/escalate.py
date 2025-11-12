@@ -53,8 +53,10 @@ def escalate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         intercom_api_key = os.getenv("INTERCOM_API_KEY")
         if not intercom_api_key:
             raise ValueError("INTERCOM_API_KEY environment variable is required")
-
-        intercom_client = IntercomClient(intercom_api_key)
+        
+        # Initialize Intercom client with dry_run from state
+        dry_run = state.get("dry_run", False)
+        intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
 
         # Build escalation note
         note_content = _build_escalation_note(state, escalate_data)

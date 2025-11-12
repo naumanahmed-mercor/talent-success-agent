@@ -48,7 +48,9 @@ def response_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if not intercom_api_key:
             raise ValueError("INTERCOM_API_KEY environment variable is required")
         
-        intercom_client = IntercomClient(intercom_api_key)
+        # Check for dry run mode from state
+        dry_run = state.get("dry_run", False)
+        intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
         
         # Send message to conversation
         print(f"📨 Sending message to conversation {conversation_id}")

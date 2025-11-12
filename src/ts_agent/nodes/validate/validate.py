@@ -103,7 +103,9 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 if not intercom_api_key:
                     raise ValueError("INTERCOM_API_KEY environment variable is required")
                 
-                intercom_client = IntercomClient(intercom_api_key)
+                # Initialize Intercom client with dry_run from state
+                dry_run = state.get("dry_run", False)
+                intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
                 
                 # Always use raw JSON format for the note
                 overall_status = "✅ PASSED" if validation_result.get("overall_passed") else "❌ FAILED"
