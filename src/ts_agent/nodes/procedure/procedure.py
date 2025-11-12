@@ -13,6 +13,7 @@ from ts_agent.llm import planner_llm
 from src.mcp.factory import create_mcp_client
 from src.clients.intercom import IntercomClient
 from src.clients.prompts import get_prompt, PROMPT_NAMES
+from src.utils.debug import dump_prompt_to_file
 from .schemas import (
     ProcedureData,
     ProcedureResult,
@@ -348,6 +349,10 @@ def _fetch_procedure_by_id(procedure_id: str) -> Optional[ProcedureResult]:
         response.raise_for_status()
         procedure_data = response.json()
         
+        # Unwrap the procedure data if it's nested under 'procedure' key
+        if "procedure" in procedure_data:
+            procedure_data = procedure_data["procedure"]
+        
         # Parse the procedure data into ProcedureResult
         content_parts = []
         
@@ -368,7 +373,13 @@ def _fetch_procedure_by_id(procedure_id: str) -> Optional[ProcedureResult]:
         
         # Add notes if present
         if "notes" in procedure_data and procedure_data["notes"]:
-            content_parts.append(f"\nNotes:\n{procedure_data['notes']}")
+            # Handle notes as either a list or string
+            if isinstance(procedure_data["notes"], list):
+                content_parts.append("\nNotes:")
+                for note in procedure_data["notes"]:
+                    content_parts.append(f"- {note}")
+            else:
+                content_parts.append(f"\nNotes:\n{procedure_data['notes']}")
         
         content = "\n".join(content_parts)
         
@@ -530,6 +541,17 @@ Retrieved Procedures:
 {procedures_text}
 
 Evaluate these procedures and determine if any perfectly match this scenario."""
+    
+    # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
+    full_prompt = f"SYSTEM PROMPT:\n{'-'*80}\n{system_prompt}\n\n"
+    full_prompt += f"USER PROMPT:\n{'-'*80}\n{user_prompt}"
+    
+    metadata = {
+        "Query": query,
+        "Number of Procedures": len(procedures)
+    }
+    
+    dump_prompt_to_file(full_prompt, "procedure_eval", metadata=metadata)
     
     llm = planner_llm().with_structured_output(ProcedureEvaluation)
     

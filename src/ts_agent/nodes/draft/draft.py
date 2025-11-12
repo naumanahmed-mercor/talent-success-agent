@@ -9,6 +9,7 @@ from typing import Dict, Any, List
 from ts_agent.llm import drafter_llm
 from src.clients.prompts import get_prompt, PROMPT_NAMES
 from src.utils.prompts import build_conversation_and_user_context
+from src.utils.debug import dump_prompt_to_file
 from .schemas import DraftData, ResponseType
 
 
@@ -312,28 +313,18 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
     if context_data["sources"]:
         data_summary.append(f"Sources: {len(context_data['sources'])} documents found")
     
-    # Format documentation content for the prompt
+    # Format documentation content and tool data for the prompt
     docs_content = ""
-    if context_data["documentation_content"]:
-        docs_content = "\n\nRELEVANT DATA:\n"
-        for i, doc in enumerate(context_data["documentation_content"], 1):
-            docs_content += f"\n{i}. {doc.get('title', 'Unknown')}"
-            if doc.get('heading'):
-                docs_content += f" - {doc['heading']}"
-            
-            # Handle application data specially
-            if doc.get('type') == 'application_data' and 'applications' in doc:
-                docs_content += f"\n   {doc.get('text', '')}\n"
-                for j, app in enumerate(doc['applications'], 1):
-                    title = app.get('listing_title', 'Unknown')
-                    status = app.get('status', 'Unknown')
-                    applied_at = app.get('applied_at', 'Unknown')
-                    docs_content += f"   Application {j}: {title} - Status: {status} (Applied: {applied_at})\n"
-            else:
-                docs_content += f"\n   Content: {doc.get('text', '')}\n"
-            
-            if doc.get('url'):
-                docs_content += f"   Source: {doc['url']}\n"
+    
+    # Add tool data
+    if context_data.get("tool_data"):
+        docs_content += "\n\nTOOL DATA:\n"
+        docs_content += json.dumps(context_data["tool_data"], indent=2)
+    
+    # Add docs data
+    if context_data.get("docs_data"):
+        docs_content += "\n\nDOCUMENTATION DATA:\n"
+        docs_content += json.dumps(context_data["docs_data"], indent=2)
     
     # Create the prompt
     # Get prompt from LangSmith
@@ -349,5 +340,18 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         user_details=user_details,
         data_summary=full_data_summary
     )
+    
+    # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
+    metadata = {
+        "Prompt Length": f"{len(prompt)} characters",
+        "Has Validation Feedback": bool(validation_feedback),
+        "Has Coverage Reasoning": bool(coverage_reasoning),
+        "Tool Data Count": len(context_data.get('tool_data', {})),
+        "Docs Data Count": len(context_data.get('docs_data', {})),
+        "Documentation Content Count": len(context_data.get('documentation_content', []))
+    }
+    
+    suffix = "_retry" if validation_feedback else ""
+    dump_prompt_to_file(prompt, "draft", metadata=metadata, suffix=suffix)
 
     return prompt

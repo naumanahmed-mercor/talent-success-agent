@@ -141,14 +141,14 @@ def format_procedure_for_prompt(selected_procedure: Optional[Dict[str, Any]] = N
     reasoning = selected_procedure.get("reasoning", "")
     
     procedure_text = "**INTERNAL PROCEDURE GUIDANCE:**\n"
-    procedure_text += f"An internal procedure has been identified that provides guidance for this scenario:\n\n"
+    procedure_text += f"An internal procedure has been identified that provides REQUIRED guidance for this scenario:\n\n"
     procedure_text += f"Title: {title}\n\n"
     
     if reasoning:
         procedure_text += f"Why this procedure was selected: {reasoning}\n\n"
     
     procedure_text += f"Procedure Details:\n{content}\n\n"
-    procedure_text += "**Consider this guidance when making decisions, but also use available tools as needed.**"
+    procedure_text += "**IMPORTANT: Follow the procedure's steps and use ALL required tools listed in 'Tools Required'. The procedure provides mandatory guidance for handling this scenario correctly.**"
     
     return procedure_text
 

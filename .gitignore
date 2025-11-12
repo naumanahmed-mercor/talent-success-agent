@@ -61,6 +61,7 @@ single_test_result_*.json
 
 # Local test runs
 local_runs/
+debug_prompts/
 
 # Temporary files
 *.tmp

@@ -8,6 +8,7 @@ from .schemas import PlanData, Plan, PlanRequest
 from ts_agent.llm import planner_llm
 from src.clients.prompts import get_prompt, PROMPT_NAMES
 from src.utils.prompts import build_conversation_and_user_context, format_procedure_for_prompt
+from src.utils.debug import dump_prompt_to_file, dump_response_to_file
 from jsonschema import validate, ValidationError
 import logging
 
@@ -449,6 +450,17 @@ def _generate_plan(
     logger.debug(f"Plan prompt length: {len(prompt)} characters")
     if validation_errors:
         logger.debug(f"Retry prompt with {len(validation_errors)} validation errors")
+    
+    # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
+    metadata = {
+        "Prompt Length": f"{len(prompt)} characters",
+        "Is Retry": bool(validation_errors),
+        "Has Procedure": bool(selected_procedure)
+    }
+    if validation_errors:
+        metadata["Validation Errors"] = len(validation_errors)
+    
+    dump_prompt_to_file(prompt, "plan", metadata=metadata)
         
     # Get LLM response with structured output
     # Use function_calling method since Plan schema contains Dict[str, Any] 
@@ -456,6 +468,30 @@ def _generate_plan(
     llm = planner_llm()
     llm_with_structure = llm.with_structured_output(Plan, method="function_calling")
     plan = llm_with_structure.invoke(prompt)
+    
+    # Debug: Dump LLM response to file if DEBUG_PROMPTS env var is set
+    import time
+    response_data = {
+        "timestamp": time.strftime("%Y%m%d_%H%M%S"),
+        "is_retry": bool(validation_errors),
+        "reasoning": plan.reasoning,
+        "tool_calls": [
+            {
+                "tool_name": tc.tool_name,
+                "parameters": tc.parameters,
+                "reasoning": tc.reasoning
+            }
+            for tc in plan.tool_calls
+        ],
+        "metadata": {
+            "total_tool_calls": len(plan.tool_calls),
+            "prompt_length": len(prompt),
+            "has_procedure": bool(selected_procedure)
+        }
+    }
+    
+    suffix = "_retry" if validation_errors else "_response"
+    dump_response_to_file(response_data, "plan", suffix=suffix)
     
     return plan
 
