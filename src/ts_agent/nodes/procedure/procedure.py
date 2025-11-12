@@ -28,9 +28,10 @@ def procedure_node(state: State) -> State:
     Retrieve and evaluate procedures from RAG store.
     
     Steps:
-    1. Check if procedure_id is provided in state (test mode)
-       - If yes, fetch procedure by ID
-       - If no, generate query and search
+    1. Check if procedure_id is provided in state:
+       - If explicitly set to empty string or None: skip procedure retrieval entirely
+       - If has valid value: fetch procedure by ID
+       - If not in state: generate query and search
     2. If searching: Generate a query using LLM based on user's messages
     3. Fetch top-k results from procedure RAG endpoint (or single by ID)
     4. Evaluate results using LLM to find matching procedure
@@ -45,8 +46,30 @@ def procedure_node(state: State) -> State:
     try:
         print("📚 Starting procedure retrieval...")
         
-        # Check if procedure_id is provided (test mode)
-        procedure_id = state.get("procedure_id")
+        # Check if procedure_id is explicitly provided in state
+        if "procedure_id" in state:
+            procedure_id = state.get("procedure_id")
+            
+            # If procedure_id is explicitly empty or None, skip procedure retrieval
+            if procedure_id == "" or procedure_id is None:
+                print(f"⏭️  procedure_id explicitly set to empty/null - skipping procedure retrieval")
+                state["selected_procedure"] = None
+                
+                # Store minimal procedure data indicating skip
+                procedure_data = ProcedureData(
+                    query="",
+                    query_reasoning="Procedure retrieval explicitly skipped (procedure_id set to empty/null)",
+                    top_k_results=[],
+                    selected_procedure=None,
+                    evaluation_reasoning="Procedure retrieval skipped",
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    success=True,
+                    error=None
+                )
+                state["procedure_node"] = procedure_data.model_dump()
+                return state
+        else:
+            procedure_id = None
         
         if procedure_id:
             # Test mode: Fetch procedure by ID directly
@@ -102,7 +125,8 @@ def procedure_node(state: State) -> State:
         # Step 2: Fetch top-k results from MCP API
         print("📥 Fetching procedures from MCP server...")
         top_k = int(os.getenv("PROCEDURE_TOP_K", "5"))
-        rag_results = _fetch_procedures_from_mcp(query_result.query, top_k)
+        mode = state.get("mode")
+        rag_results = _fetch_procedures_from_mcp(query_result.query, mode, top_k)
         print(f"✅ Retrieved {len(rag_results)} procedures")
         
         # Step 3: Evaluate results using LLM
@@ -403,19 +427,20 @@ def _fetch_procedure_by_id(procedure_id: str) -> Optional[ProcedureResult]:
         return None
 
 
-def _fetch_procedures_from_mcp(query: str, top_k: int = 5) -> List[ProcedureResult]:
+def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: int = 5) -> List[ProcedureResult]:
     """
     Fetch procedures from MCP API using search_procedures tool.
     
     Args:
         query: Search query
+        mode: Optional mode for auth token selection (e.g., "splvin")
         top_k: Number of results to fetch
         
     Returns:
         List of ProcedureResult objects
     """
-    # Create MCP client
-    mcp_client = create_mcp_client()
+    # Create MCP client with mode-based auth token
+    mcp_client = create_mcp_client(mode=mode)
     
     try:
         # Call search_procedures tool via MCP client
