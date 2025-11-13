@@ -93,7 +93,7 @@ def format_user_details(user_details: Optional[Dict[str, Any]] = None, name: Opt
             parts.append(f"Name: {name}")
         if email:
             parts.append(f"Email: {email}")
-    
+        
     if not parts:
         parts.append("User details: Not available")
     

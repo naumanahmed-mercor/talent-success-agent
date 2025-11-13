@@ -65,13 +65,15 @@ def draft_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 coverage_reasoning = coverage_response.get("reasoning") if isinstance(coverage_response, dict) else None
         
         # Generate response using LLM
+        mode = state.get("mode")
         response = _generate_response(
             formatted_context["conversation_history"],
             formatted_context["user_details"],
             tool_data,
             docs_data,
             coverage_reasoning,
-            validation_feedback
+            validation_feedback,
+            mode
         )
         
         generation_time = (time.time() - start_time) * 1000
@@ -127,7 +129,8 @@ def _generate_response(
     tool_data: Dict[str, Any],
     docs_data: Dict[str, Any],
     coverage_reasoning: str = None,
-    validation_feedback: Dict[str, Any] = None
+    validation_feedback: Dict[str, Any] = None,
+    mode: str = None
 ) -> Dict[str, Any]:
     """
     Generate a response using LLM based on accumulated data.
@@ -139,6 +142,7 @@ def _generate_response(
         docs_data: Accumulated docs data
         coverage_reasoning: Reasoning from latest coverage analysis (optional)
         validation_feedback: Validation feedback from a failed validation attempt (optional)
+        mode: Execution mode (e.g., "splvin") to determine which prompt to use (optional)
         
     Returns:
         Generated response with metadata
@@ -149,7 +153,7 @@ def _generate_response(
     context_data = _prepare_context_data(tool_data, docs_data)
     
     # Create system prompt with conversation context and user details
-    system_prompt = _create_system_prompt(conversation_history, user_details, context_data, coverage_reasoning, validation_feedback)
+    system_prompt = _create_system_prompt(conversation_history, user_details, context_data, coverage_reasoning, validation_feedback, mode)
     
     # Generate response with structured output
     from .schemas import DraftResponse
@@ -279,7 +283,7 @@ def _prepare_context_data(tool_data: Dict[str, Any], docs_data: Dict[str, Any]) 
     return context
 
 
-def _create_system_prompt(conversation_history: str, user_details: str, context_data: Dict[str, Any], coverage_reasoning: str = None, validation_feedback: Dict[str, Any] = None) -> str:
+def _create_system_prompt(conversation_history: str, user_details: str, context_data: Dict[str, Any], coverage_reasoning: str = None, validation_feedback: Dict[str, Any] = None, mode: str = None) -> str:
     """
     Create system prompt for response generation.
     
@@ -289,6 +293,7 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         context_data: Prepared context data
         coverage_reasoning: Reasoning from latest coverage analysis (optional)
         validation_feedback: Validation feedback from a failed validation attempt (optional)
+        mode: Execution mode (e.g., "splvin") to determine which prompt to use (optional)
         
     Returns:
         System prompt string
@@ -326,9 +331,15 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         docs_content += "\n\nDOCUMENTATION DATA:\n"
         docs_content += json.dumps(context_data["docs_data"], indent=2)
     
-    # Create the prompt
+    # Select prompt based on mode
+    if mode == "splvin":
+        prompt_name = PROMPT_NAMES["DRAFT_NODE_SLACK"]
+        print(f"🎯 Using splvin draft prompt: {prompt_name}")
+    else:
+        prompt_name = PROMPT_NAMES["DRAFT_NODE"]
+    
     # Get prompt from LangSmith
-    prompt_template = get_prompt(PROMPT_NAMES["DRAFT_NODE"])
+    prompt_template = get_prompt(prompt_name)
     
     # Format the prompt with variables using direct string replacement
     data_summary_text = ', '.join(data_summary) if data_summary else 'No specific data available'

@@ -99,5 +99,6 @@ PROMPT_NAMES = {
     "PLAN_NODE": "talent-success-agent-plan",
     "COVERAGE_NODE": "talent-success-agent-coverage", 
     "DRAFT_NODE": "talent-success-agent-draft",
+    "DRAFT_NODE_SLACK": "melvin-draft-slack",
     "PROCEDURE_MATCHING": "melvin-procedure-matching-prompt"
 }
