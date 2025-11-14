@@ -2,12 +2,15 @@
 
 import os
 import re
+import logging
 from typing import Dict, Any, List, Optional
 from ts_agent.types import State, ToolType
 from .schemas import CoverageData, CoverageResponse, DataGap
 from ts_agent.llm import planner_llm
 from src.clients.prompts import get_prompt, PROMPT_NAMES
 from src.utils.prompts import build_conversation_and_user_context, format_procedure_for_prompt
+
+logger = logging.getLogger(__name__)
 
 
 def coverage_node(state: State) -> State:
@@ -63,6 +66,15 @@ def coverage_node(state: State) -> State:
     plan_data = current_hop_data.get("plan", {})
     planned_action_tools = plan_data.get("action_tool_calls", [])
     
+    # Get available tools from state to fetch full schemas
+    available_tools = state.get("available_tools", [])
+    
+    # Enrich planned action tools with full schemas from available_tools
+    enriched_action_tools = _enrich_action_tools_with_schemas(planned_action_tools, available_tools)
+    
+    # Get conversation_id from state to include in context
+    conversation_id = state.get("conversation_id", "")
+    
     # Coverage should ONLY see action tools that Plan suggested (with proper parameters)
     # Don't show all available action tools - Plan has the validation logic
     
@@ -78,7 +90,7 @@ def coverage_node(state: State) -> State:
             plan_reasoning = current_hop_data["plan"].get("reasoning")
         
         # Perform coverage analysis with full conversation history
-        # Only pass planned_action_tools (what Plan suggested), not all available action tools
+        # Pass enriched action tools with full schemas
         coverage_response = _analyze_coverage(
             formatted_context["conversation_history"],
             formatted_context["user_details"],
@@ -87,11 +99,12 @@ def coverage_node(state: State) -> State:
             hop_number,
             max_hops,
             plan_reasoning,
-            planned_action_tools,  # Only what Plan suggested
+            enriched_action_tools,  # Pass enriched tools with full schemas
             actions_taken,
             max_actions,
             executed_actions,  # Pass executed actions
-            state.get("selected_procedure")  # Pass selected procedure
+            state.get("selected_procedure"),  # Pass selected procedure
+            conversation_id  # Pass conversation_id for context
         )
         
         # Print analysis results
@@ -135,7 +148,7 @@ def coverage_node(state: State) -> State:
                     # Find the action tool from Plan's suggestions
                     action_tool_name = action_decision.action_tool_name
                     action_tool_from_plan = next(
-                        (tool for tool in planned_action_tools if tool.get("tool_name") == action_tool_name),
+                        (tool for tool in enriched_action_tools if tool.get("tool_name") == action_tool_name),
                         None
                     )
                     
@@ -143,12 +156,50 @@ def coverage_node(state: State) -> State:
                         print(f"⚠️  Coverage wants to execute '{action_tool_name}' but it wasn't in Plan's suggestions - routing to respond")
                         state["next_node"] = "respond"
                     else:
-                        print(f"⚡ Redirecting to action node to execute: {action_tool_name}")
-                        print(f"   Plan's tool call: {action_tool_from_plan}")
-                        print(f"   Coverage's reasoning: {action_decision.reasoning}")
+                        # Validate and sanitize action tool parameters
+                        from src.utils.sanitization import sanitize_tool_params
                         
-                        # Store which action tool to execute (will be retrieved by action node from plan data)
-                        state["next_node"] = "action"
+                        try:
+                            # Get tool schema and type
+                            tool_schema = action_tool_from_plan.get("tool_schema")
+                            tool_type = action_tool_from_plan.get("tool_type", ToolType.INTERNAL_ACTION.value)
+                            
+                            if not tool_schema:
+                                print(f"⚠️  No tool schema found for '{action_tool_name}' - routing to respond")
+                                state["next_node"] = "respond"
+                            else:
+                                # Validate and sanitize parameters
+                                coverage_params = action_decision.parameters
+                                conversation_id = state.get("conversation_id", "")
+                                input_schema = tool_schema.get("inputSchema", {})
+                                
+                                # Build injection map with conversation_id (ensure it's a string)
+                                injection_map = {
+                                    "conversation_id": str(conversation_id) if conversation_id else "",
+                                }
+                                
+                                sanitized_params = sanitize_tool_params(
+                                    coverage_params,
+                                    input_schema,
+                                    action_tool_name,
+                                    injection_map,
+                                    tool_type=tool_type
+                                )
+                                
+                                # Update action_decision with sanitized parameters
+                                coverage_response.action_decision.parameters = sanitized_params
+                                
+                                print(f"⚡ Redirecting to action node to execute: {action_tool_name}")
+                                print(f"   Coverage's reasoning: {action_decision.reasoning}")
+                                print(f"   Sanitized parameters: {sanitized_params}")
+                                
+                                # Store which action tool to execute
+                                state["next_node"] = "action"
+                        
+                        except Exception as e:
+                            print(f"⚠️  Parameter validation failed for '{action_tool_name}': {e}")
+                            print(f"   Routing to respond instead")
+                            state["next_node"] = "respond"
         elif coverage_response.next_action == "continue":
             print(f"✅ Proceeding to response generation...")
             state["next_node"] = "respond"
@@ -176,6 +227,43 @@ def coverage_node(state: State) -> State:
 
 
 
+def _enrich_action_tools_with_schemas(
+    planned_action_tools: List[Dict[str, Any]],
+    available_tools: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Enrich planned action tools with full schemas from available_tools.
+    
+    Args:
+        planned_action_tools: Action tools suggested by Plan (tool_name, parameters, reasoning)
+        available_tools: All available tools from MCP with full schemas
+        
+    Returns:
+        Enriched action tools with full schemas added
+    """
+    enriched_tools = []
+    
+    for planned_tool in planned_action_tools:
+        tool_name = planned_tool.get("tool_name")
+        
+        # Find the full tool schema from available_tools
+        tool_schema = next(
+            (tool for tool in available_tools if tool.get("name") == tool_name),
+            None
+        )
+        
+        # Create enriched tool with schema
+        enriched_tool = planned_tool.copy()
+        if tool_schema:
+            enriched_tool["tool_schema"] = tool_schema
+        
+        enriched_tools.append(enriched_tool)
+    
+    return enriched_tools
+
+
+
+
 def _analyze_coverage(
     conversation_history: str,
     user_details: str,
@@ -188,7 +276,8 @@ def _analyze_coverage(
     actions_taken: int = 0,
     max_actions: int = 1,
     executed_actions: Optional[List[Dict[str, Any]]] = None,
-    selected_procedure: Optional[Dict[str, Any]] = None
+    selected_procedure: Optional[Dict[str, Any]] = None,
+    conversation_id: Optional[str] = None
 ) -> CoverageResponse:
     """
     Analyze data coverage using LLM.
@@ -201,11 +290,12 @@ def _analyze_coverage(
         hop_number: Current hop number
         max_hops: Maximum allowed hops
         plan_reasoning: Reasoning from plan node explaining why tools were/weren't chosen
-        planned_action_tools: Action tools that Plan suggested (with proper parameters)
+        planned_action_tools: Action tools suggested by Plan, enriched with full schemas
         actions_taken: Number of actions taken so far
         max_actions: Maximum allowed actions
         executed_actions: List of actions that have already been executed
         selected_procedure: Optional selected procedure from RAG store
+        conversation_id: Conversation ID for context (will be injected at runtime)
         
     Returns:
         Coverage analysis response
@@ -219,12 +309,13 @@ def _analyze_coverage(
         tool_data, 
         docs_data, 
         plan_reasoning,
-        planned_action_tools,  # Only what Plan suggested
+        planned_action_tools,  # Now includes full schemas
         actions_taken,
         max_actions,
         executed_actions,  # Pass executed actions
         hop_number,  # Add current hop
-        max_hops  # Add max hops
+        max_hops,  # Add max hops
+        conversation_id  # Add conversation_id
     )
     
     # Format procedure if available
@@ -268,7 +359,8 @@ def _summarize_accumulated_data_with_content(
     max_actions: int = 1,
     executed_actions: Optional[List[Dict[str, Any]]] = None,
     hop_number: int = 1,
-    max_hops: int = 3
+    max_hops: int = 3,
+    conversation_id: Optional[str] = None
 ) -> str:
     """Summarize accumulated tool and docs data with actual content for LLM prompt."""
     summary = []
@@ -276,6 +368,11 @@ def _summarize_accumulated_data_with_content(
     # Hop progress at the top
     summary.append(f"CURRENT HOP: {hop_number}/{max_hops}")
     summary.append("")
+    
+    # Add conversation ID context if available
+    if conversation_id:
+        summary.append(f"CONVERSATION ID: {conversation_id}")
+        summary.append("")
     
     # Plan reasoning section (helps explain why tools were/weren't chosen)
     if plan_reasoning:
@@ -317,18 +414,39 @@ def _summarize_accumulated_data_with_content(
     
     # Planned action tools section (if Plan suggested any)
     if planned_action_tools and len(planned_action_tools) > 0:
-        summary.append("\n\nPLANNED ACTION TOOLS:")
+        summary.append("\n\nAVAILABLE ACTION TOOLS:")
         summary.append(f"Actions taken so far: {actions_taken}/{max_actions}")
-        summary.append("Plan has suggested the following action tools WITH COMPLETE PARAMETERS.")
-        summary.append("You can ONLY decide to execute one of these (by name). DO NOT modify parameters.")
+        summary.append("The following action tools are available for execution.")
+        summary.append("If you decide to execute an action tool, you MUST provide complete parameters based on the tool schema and gathered data.")
         
         if actions_taken >= max_actions:
             summary.append(f"⚠️  Maximum actions reached - cannot execute more action tools")
         else:
             for tc in planned_action_tools:
-                summary.append(f"\n  - Tool Name: {tc.get('tool_name')}")
-                summary.append(f"    Plan's Reasoning: {tc.get('reasoning')}")
-                summary.append(f"    Parameters (already validated and injected by Plan): {tc.get('parameters')}")
+                tool_name = tc.get('tool_name')
+                summary.append(f"\n  Tool: {tool_name}")
+                summary.append(f"  Plan's Reasoning: {tc.get('reasoning', 'N/A')}")
+                
+                # Show full tool schema if available
+                tool_schema = tc.get('tool_schema')
+                if tool_schema:
+                    summary.append(f"  Tool Description: {tool_schema.get('description', 'N/A')}")
+                    
+                    # Show input schema
+                    input_schema = tool_schema.get('inputSchema')
+                    if input_schema:
+                        summary.append(f"  Input Schema:")
+                        properties = input_schema.get('properties', {})
+                        required_params = input_schema.get('required', [])
+                        
+                        for param_name, param_info in properties.items():
+                            is_required = "REQUIRED" if param_name in required_params else "optional"
+                            param_type = param_info.get('type', 'any')
+                            param_desc = param_info.get('description', 'No description')
+                            summary.append(f"    - {param_name} ({param_type}, {is_required}): {param_desc}")
+                else:
+                    # Fallback to showing Plan's parameters if no schema
+                    summary.append(f"  Suggested Parameters: {tc.get('parameters', {})}")
     
     return "\n".join(summary)
 

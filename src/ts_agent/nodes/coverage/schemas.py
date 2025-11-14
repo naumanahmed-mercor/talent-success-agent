@@ -30,8 +30,9 @@ class ActionDecision(BaseModel):
     """Schema for coverage's decision to execute an action tool."""
     model_config = {"extra": "forbid"}
     
-    action_tool_name: str = Field(..., description="Name of the action tool from Plan's suggestions to execute")
+    action_tool_name: str = Field(..., description="Name of the action tool to execute")
     reasoning: str = Field(..., description="Why Coverage decided to execute this action tool now")
+    parameters: Dict[str, Any] = Field(..., description="Complete parameters for the action tool based on the tool schema and gathered data")
 
 
 class CoverageResponse(BaseModel):

@@ -150,6 +150,8 @@ def initialize_node(state: State) -> State:
                 tool_name = tool.get("name", "")
                 if tool_name == "match_and_link_conversation_to_ticket":
                     tool["tool_type"] = ToolType.INTERNAL_ACTION.value
+                elif tool_name == "route_conversation_to_project_client":
+                    tool["tool_type"] = ToolType.INTERNAL_ACTION.value
                 else:
                     tool["tool_type"] = ToolType.GATHER.value
             

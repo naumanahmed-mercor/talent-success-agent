@@ -46,28 +46,21 @@ def action_node(state: State) -> State:
     # Get action tool name from coverage's decision
     action_tool_name = action_decision.get("action_tool_name")
     coverage_reasoning = action_decision.get("reasoning", "")
+    coverage_parameters = action_decision.get("parameters", {})
     
     if not action_tool_name:
         state["error"] = "No action tool name in coverage decision"
         return state
     
-    # Get the FULL action tool call (with parameters) from Plan's suggestions
-    # Coverage only decides WHICH tool to run, Plan has the parameters
-    plan_data = current_hop_data.get("plan", {})
-    planned_action_tools = plan_data.get("action_tool_calls", [])
+    # Coverage now provides the full parameters
+    # We just need to inject runtime values like conversation_id
+    action_tool_params = coverage_parameters.copy()
     
-    action_tool_from_plan = next(
-        (tool for tool in planned_action_tools if tool.get("tool_name") == action_tool_name),
-        None
-    )
-    
-    if not action_tool_from_plan:
-        state["error"] = f"Action tool '{action_tool_name}' not found in Plan's suggestions"
-        return state
-    
-    # Use parameters from Plan (already validated and injected by Plan node)
-    action_tool_params = action_tool_from_plan.get("parameters", {})
-    plan_reasoning = action_tool_from_plan.get("reasoning", "")
+    # Inject conversation_id at runtime to ensure correctness
+    conversation_id = state.get("conversation_id")
+    if conversation_id:
+        action_tool_params["conversation_id"] = conversation_id
+        print(f"💉 Injected conversation_id at runtime: {conversation_id}")
     
     print(f"⚡ Action Node - Executing: {action_tool_name}")
     print("=" * 50)
@@ -82,7 +75,9 @@ def action_node(state: State) -> State:
         start_time = time.time()
         
         print(f"🚀 Executing action tool: {action_tool_name}...")
-        result_data = _execute_action_tool(mcp_client, action_tool_name, action_tool_params)
+        # Pass dry_run flag from state to the tool
+        dry_run = state.get("dry_run", False)
+        result_data = _execute_action_tool(mcp_client, action_tool_name, action_tool_params, dry_run)
         
         execution_time = (time.time() - start_time) * 1000  # Convert to milliseconds
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -110,6 +105,11 @@ def action_node(state: State) -> State:
         # Determine if this action requires human review
         # Actions require review if they made actual changes (not just "no matches found")
         requires_review = _action_requires_review(action_tool_name, result_data)
+        
+        if requires_review:
+            print(f"⚠️  Action '{action_tool_name}' requires human review - will escalate after response")
+        else:
+            print(f"✅ Action '{action_tool_name}' does not require escalation")
         
         # Store action data at state level (not in hop data)
         action_data: ActionData = {
@@ -229,6 +229,16 @@ def _action_requires_review(tool_name: str, result_data: Any) -> bool:
     """
     import json
     
+    # Configuration: Tools that should NOT trigger escalation
+    # These tools are considered safe or self-contained actions
+    NO_ESCALATION_TOOLS = {
+        "route_conversation_to_project_client",  # Just routes conversation, no data changes
+    }
+    
+    # If tool is in the no-escalation list, never require review
+    if tool_name in NO_ESCALATION_TOOLS:
+        return False
+    
     if tool_name == "match_and_link_conversation_to_ticket":
         # Check if the tool actually matched/linked a ticket
         # Result structure: [{"type": "text", "text": "{...JSON...}"}]
@@ -251,10 +261,11 @@ def _action_requires_review(tool_name: str, result_data: Any) -> bool:
         return True
     
     # For other action tools, default to requiring review
+    # Add tools to NO_ESCALATION_TOOLS above to skip escalation
     return True
 
 
-def _execute_action_tool(mcp_client, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+def _execute_action_tool(mcp_client, tool_name: str, parameters: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     """
     Execute a single action tool using MCP client with extended timeout.
     
@@ -265,13 +276,20 @@ def _execute_action_tool(mcp_client, tool_name: str, parameters: Dict[str, Any])
         mcp_client: MCP client instance
         tool_name: Action tool name to execute
         parameters: Parameters for the action tool
+        dry_run: If True, pass dry_run parameter to the tool
         
     Returns:
         Action tool execution result data
     """
+    # Add dry_run parameter to tool parameters if specified
+    tool_parameters = parameters.copy()
+    if dry_run:
+        tool_parameters["dry_run"] = True
+        print(f"🧪 Dry run mode: passing dry_run=True to {tool_name}")
+    
     try:
         # Use 120-second timeout for action tools (vs 30s default for gather tools)
-        result = mcp_client.call_tool(tool_name, parameters, timeout=120.0)
+        result = mcp_client.call_tool(tool_name, tool_parameters, timeout=120.0)
         return result
     except Exception as e:
         raise Exception(f"Action tool execution failed: {str(e)}")
