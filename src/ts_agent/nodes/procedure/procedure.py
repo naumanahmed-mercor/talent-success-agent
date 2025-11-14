@@ -151,6 +151,9 @@ def procedure_node(state: State) -> State:
             # Store selected procedure at root level
             state["selected_procedure"] = selected_procedure.model_dump()
             
+            # Filter available_tools based on procedure-specific tool requirements
+            _filter_procedure_specific_tools(state, selected_procedure)
+            
             # Log procedure selection to API
             _log_procedure_selection_to_api(
                 state=state,
@@ -160,6 +163,9 @@ def procedure_node(state: State) -> State:
         else:
             print("ℹ️  No procedure selected")
             state["selected_procedure"] = None
+            
+            # Filter out procedure-specific tools when no procedure is selected
+            _filter_procedure_specific_tools(state, None)
         
         # Store procedure data
         procedure_data = ProcedureData(
@@ -202,11 +208,88 @@ def procedure_node(state: State) -> State:
         state["procedure_node"] = procedure_data.model_dump()
         state["selected_procedure"] = None
         
+        # Filter out procedure-specific tools when procedure retrieval fails
+        _filter_procedure_specific_tools(state, None)
+        
         # Don't set error in state - this is a non-critical failure
         # The agent can continue without procedures
         print("⚠️  Continuing without procedure guidance")
     
     return state
+
+
+def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[SelectedProcedure]) -> None:
+    """
+    Filter available_tools in state based on procedure-specific tool requirements.
+    
+    Some tools are sensitive and should only be available when explicitly mentioned
+    in the selected procedure content. If no procedure is selected, all procedure-specific
+    tools are removed.
+    
+    Args:
+        state: Current state with available_tools
+        selected_procedure: The selected procedure with content to check (None if no procedure)
+    """
+    # Configuration: Tools that require procedure authorization
+    # These tools will be removed from available_tools unless mentioned in procedure content
+    PROCEDURE_SPECIFIC_TOOLS = {
+        "route_conversation_to_project_client": {
+            "reason": "Sensitive routing action - only available when procedure explicitly requires it",
+            "search_terms": ["route_conversation_to_project_client", "route to project", "route to client"]
+        }
+    }
+    
+    available_tools = state.get("available_tools", [])
+    if not available_tools:
+        return
+    
+    # If no procedure, remove all procedure-specific tools
+    if not selected_procedure:
+        tool_names = list(PROCEDURE_SPECIFIC_TOOLS.keys())
+        filtered_tools = [
+            tool for tool in available_tools 
+            if tool.get("name") not in tool_names
+        ]
+        
+        removed_count = len(available_tools) - len(filtered_tools)
+        
+        if removed_count > 0:
+            state["available_tools"] = filtered_tools
+            print(f"🔒 No procedure selected: filtered out {removed_count} procedure-specific tool(s)")
+            print(f"   Tools removed: {', '.join(tool_names)}")
+            print(f"   Total tools available: {len(filtered_tools)}")
+        return
+    
+    # Procedure selected - check which tools are authorized
+    procedure_content = selected_procedure.content.lower() if selected_procedure.content else ""
+    
+    # Track which tools to remove
+    tools_to_remove = []
+    
+    for tool_name, config in PROCEDURE_SPECIFIC_TOOLS.items():
+        # Check if any search term is in the procedure content
+        is_authorized = any(
+            search_term.lower() in procedure_content 
+            for search_term in config["search_terms"]
+        )
+        
+        if not is_authorized:
+            tools_to_remove.append(tool_name)
+            print(f"🔒 Filtering out '{tool_name}': not mentioned in procedure")
+            print(f"   Reason: {config['reason']}")
+    
+    # Remove unauthorized tools from available_tools
+    if tools_to_remove:
+        filtered_tools = [
+            tool for tool in available_tools 
+            if tool.get("name") not in tools_to_remove
+        ]
+        
+        removed_count = len(available_tools) - len(filtered_tools)
+        state["available_tools"] = filtered_tools
+        
+        print(f"🔧 Filtered {removed_count} procedure-specific tool(s) from available_tools")
+        print(f"   Total tools available: {len(filtered_tools)}")
 
 
 def _generate_query(messages: List[Dict[str, Any]]) -> QueryGeneration:
@@ -429,54 +512,63 @@ def _fetch_procedure_by_id(procedure_id: str) -> Optional[ProcedureResult]:
 
 def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: int = 5) -> List[ProcedureResult]:
     """
-    Fetch procedures from MCP API using search_procedures tool.
+    Fetch procedures from MCP API using /talent-success/procedures/search endpoint.
     
     Args:
         query: Search query
-        mode: Optional mode for auth token selection (e.g., "splvin")
+        mode: Optional mode (not used for direct HTTP calls)
         top_k: Number of results to fetch
         
     Returns:
         List of ProcedureResult objects
     """
-    # Create MCP client with mode-based auth token
-    mcp_client = create_mcp_client(mode=mode)
-    
     try:
-        # Call search_procedures tool via MCP client
-        content = mcp_client.call_tool(
-            tool_name="search_procedures",
-            arguments={
-                "query": query,
-                "top_k": top_k
-            },
-            timeout=30.0
-        )
+        # Get MCP configuration
+        mcp_base_url = os.getenv("MCP_BASE_URL", "https://aws.api.mercor.com")
+        mcp_auth_token = os.getenv("MCP_AUTH_TOKEN")
         
-        # MCP returns content as array of text/image objects
-        # Find the text content containing results
-        results_text = None
-        for item in content:
-            if item.get("type") == "text":
-                results_text = item.get("text")
-                break
+        if not mcp_auth_token:
+            raise ValueError("MCP_AUTH_TOKEN must be set")
         
-        if not results_text:
-            return []
+        # Call search endpoint
+        url = f"{mcp_base_url}/talent-success/procedures/search"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {mcp_auth_token}"
+        }
+        payload = {
+            "query": query,
+            "top_k": top_k,
+            "min_score": 0.3
+        }
         
-        # Parse the JSON results from text
-        import json
-        results_data = json.loads(results_text)
+        print(f"📡 Calling MCP search endpoint: POST {url}")
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        results_data = data.get("results", [])
+        
+        print(f"✅ Retrieved {len(results_data)} results from search endpoint")
+        
+        # Debug: print first result structure
+        if results_data:
+            print(f"📋 Sample result structure: {list(results_data[0].keys())}")
+            print(f"   First result: {results_data[0]}")
         
         # Parse results into ProcedureResult objects
         results = []
-        for item in results_data.get("results", []):
+        for item in results_data:
             # Construct content from the procedure structure
             content_parts = []
             
             # Add description
             if "description" in item:
                 content_parts.append(f"Description: {item['description']}")
+            
+            # Add category
+            if "category" in item:
+                content_parts.append(f"Category: {item['category']}")
             
             # Add tools required
             if "tools_required" in item and item["tools_required"]:
@@ -498,10 +590,15 @@ def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: in
             # Combine all parts
             content = "\n".join(content_parts) if content_parts else ""
             
-            # Convert ID to string if it's an integer
-            proc_id = item.get("id")
+            # Get ID - try both 'id' and 'procedure_id' fields
+            proc_id = item.get("id") or item.get("procedure_id")
             if isinstance(proc_id, int):
                 proc_id = str(proc_id)
+            
+            # Debug log if ID is missing
+            if not proc_id:
+                print(f"⚠️  Warning: Procedure missing ID - title: {item.get('title')}")
+                print(f"   Available keys: {list(item.keys())}")
             
             result = ProcedureResult(
                 id=proc_id,
@@ -519,8 +616,6 @@ def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: in
         
     except Exception as e:
         raise ValueError(f"Failed to fetch procedures from MCP API: {str(e)}")
-    finally:
-        mcp_client.close()
 
 
 def _evaluate_procedures(
@@ -529,64 +624,113 @@ def _evaluate_procedures(
     query: str
 ) -> ProcedureEvaluation:
     """
-    Evaluate procedures to find a perfect match for the current scenario.
+    Evaluate procedures using /talent-success/procedures/select endpoint.
     
     Args:
         messages: List of conversation messages
         procedures: List of retrieved procedures
-        query: The search query used
+        query: The search query used (not used in new endpoint)
         
     Returns:
         ProcedureEvaluation with match result and reasoning
     """
-    # Format messages for context
-    message_context = "\n".join([
-        f"{msg['role'].upper()}: {msg['content']}"
-        for msg in messages
-    ])
-    
-    # Format procedures for evaluation
-    procedures_text = ""
-    for idx, proc in enumerate(procedures):
-        procedures_text += f"\n--- Procedure {idx} ---\n"
-        if proc.title:
-            procedures_text += f"Title: {proc.title}\n"
-        if proc.id:
-            procedures_text += f"ID: {proc.id}\n"
-        procedures_text += f"Content:\n{proc.content}\n"
-    
-    # Get prompt from LangSmith (or local file)
-    system_prompt = get_prompt(PROMPT_NAMES["PROCEDURE_MATCHING"])
-    
-    user_prompt = f"""Conversation:
-{message_context}
-
-Search Query Used: {query}
-
-Retrieved Procedures:
-{procedures_text}
-
-Evaluate these procedures and determine if any perfectly match this scenario."""
-    
-    # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
-    full_prompt = f"SYSTEM PROMPT:\n{'-'*80}\n{system_prompt}\n\n"
-    full_prompt += f"USER PROMPT:\n{'-'*80}\n{user_prompt}"
-    
-    metadata = {
-        "Query": query,
-        "Number of Procedures": len(procedures)
-    }
-    
-    dump_prompt_to_file(full_prompt, "procedure_eval", metadata=metadata)
-    
-    llm = planner_llm().with_structured_output(ProcedureEvaluation)
-    
-    response = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt)
-    ])
-    
-    return response
+    try:
+        # Get MCP configuration
+        mcp_base_url = os.getenv("MCP_BASE_URL", "https://aws.api.mercor.com")
+        mcp_auth_token = os.getenv("MCP_AUTH_TOKEN")
+        
+        if not mcp_auth_token:
+            raise ValueError("MCP_AUTH_TOKEN must be set")
+        
+        # Convert messages to the format expected by the endpoint
+        conversation_messages = []
+        for msg in messages:
+            conversation_messages.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        # Extract procedure IDs
+        procedure_ids = [proc.id for proc in procedures if proc.id]
+        
+        print(f"📋 Extracted {len(procedure_ids)} procedure IDs for evaluation:")
+        for proc_id in procedure_ids:
+            print(f"   - {proc_id}")
+        
+        if not procedure_ids:
+            # No procedures to evaluate
+            return ProcedureEvaluation(
+                is_match=False,
+                selected_procedure_index=-1,
+                reasoning="No procedures provided for evaluation"
+            )
+        
+        # Call select endpoint
+        url = f"{mcp_base_url}/talent-success/procedures/select"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {mcp_auth_token}"
+        }
+        payload = {
+            "messages": conversation_messages,
+            "procedure_ids": procedure_ids
+        }
+        
+        print(f"📡 Calling MCP select endpoint: POST {url}")
+        print(f"   Evaluating {len(procedure_ids)} procedures")
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        print(f"📋 Select response - is_match: {data.get('is_match')}")
+        print(f"   Selected procedure data: {data.get('selected_procedure')}")
+        
+        # Parse response
+        is_match = data.get("is_match", False)
+        reasoning = data.get("reasoning", "")
+        selected_procedure_data = data.get("selected_procedure")
+        
+        if is_match and selected_procedure_data:
+            # Find the index of the selected procedure in our list
+            # Try both 'id' and 'procedure_id' fields
+            selected_id = selected_procedure_data.get("id") or selected_procedure_data.get("procedure_id")
+            if isinstance(selected_id, int):
+                selected_id = str(selected_id)
+            
+            print(f"📍 Looking for procedure with ID: {selected_id}")
+            
+            selected_index = -1
+            for idx, proc in enumerate(procedures):
+                print(f"   Checking procedure {idx}: {proc.id}")
+                if proc.id == selected_id:
+                    selected_index = idx
+                    print(f"   ✅ Found match at index {idx}")
+                    break
+            
+            if selected_index == -1:
+                print(f"   ⚠️  Warning: Selected procedure ID '{selected_id}' not found in procedures list")
+            
+            return ProcedureEvaluation(
+                is_match=True,
+                selected_procedure_index=selected_index,
+                reasoning=reasoning
+            )
+        else:
+            return ProcedureEvaluation(
+                is_match=False,
+                selected_procedure_index=-1,
+                reasoning=reasoning
+            )
+        
+    except Exception as e:
+        print(f"❌ Failed to evaluate procedures via MCP: {e}")
+        # Fallback to no match
+        return ProcedureEvaluation(
+            is_match=False,
+            selected_procedure_index=-1,
+            reasoning=f"Procedure evaluation failed: {str(e)}"
+        )
 
 
 def _log_procedure_selection_to_api(
