@@ -8,8 +8,6 @@ You are a coverage analysis agent. Your job is to determine if we have sufficien
 **USER DETAILS:**
 {user_details}
 
-{procedure}
-
 **ACCUMULATED DATA:**
 {available_data}
 
@@ -123,8 +121,12 @@ Respond with a JSON object in this **exact format**:
     "next_action": "continue|gather_more|execute_action|escalate",
     "escalation_reason": "Only if next_action is 'escalate'",
     "action_decision": {{
-        "action_tool_name": "name_of_action_tool_from_plan_suggestions",
-        "reasoning": "why YOU decided to execute this action now"
+        "action_tool_name": "name_of_action_tool",
+        "reasoning": "why YOU decided to execute this action now",
+        "parameters": {{
+            "param1": "value1",
+            "param2": "value2"
+        }}
     }}
 }}
 ```
@@ -138,13 +140,31 @@ Respond with a JSON object in this **exact format**:
 - **next_action**:
   - `"continue"`: Data is sufficient OR we've exhausted data gathering, proceed to draft response
   - `"gather_more"`: Need more data AND we have specific untried tools/queries that would help
-  - `"execute_action"`: Execute an action tool from Plan's suggestions (IMPORTANT: Plan already provided full parameters)
+  - `"execute_action"`: Execute an action tool based on gathered data
   - `"escalate"`: Cannot gather sufficient data and draft node cannot help (rare - usually let draft decide)
 - **escalation_reason**: Required if `next_action` is `"escalate"`, otherwise `null`
 - **action_decision**: **CRITICAL - Only if `next_action` is `"execute_action"`**:
-  - **action_tool_name**: The EXACT name of the action tool from Plan's "PLANNED ACTION TOOLS" section
-  - **reasoning**: Why YOU (Coverage) decided to execute this action NOW (not Plan's reasoning - that's already provided)
-  - **DO NOT specify parameters** - Plan already validated and injected all parameters (conversation_id, dry_run, etc.)
+  - **action_tool_name**: The EXACT name of the action tool from "AVAILABLE ACTION TOOLS" section
+  - **reasoning**: Why YOU (Coverage) decided to execute this action NOW based on gathered data
+  - **parameters**: Complete parameters for the tool based on:
+    - The tool's input schema (shown in "AVAILABLE ACTION TOOLS" section)
+    - Data gathered from tool executions (see "TOOL DATA" section)
+    - IMPORTANT: Do NOT include `conversation_id` - it will be automatically injected at runtime
+    - Extract required values from gathered data (e.g., `project_id` from get_user_jobs results)
+
+### Generating Action Tool Parameters
+
+When you decide to execute an action tool, you MUST generate parameters by:
+
+1. **Review the tool schema** in "AVAILABLE ACTION TOOLS" section to understand required parameters
+2. **Extract values from gathered data** in "TOOL DATA" section
+3. **Build complete parameters object** with all required fields
+4. **Do NOT include**: `conversation_id` (auto-injected) or `dry_run` (auto-set)
+
+**Example: For route_conversation_to_project_client**
+- Tool requires: `project_id` (string, REQUIRED)
+- Extract from: get_user_jobs results → jobs[0].project_id
+- Generate: `{{"parameters": {{"project_id": "proj_ABC123"}}}}`
 
 ## Examples
 
@@ -161,23 +181,21 @@ Respond with a JSON object in this **exact format**:
 }}
 ```
 
-### Example 2: Execute Action Tool - Bug Report
+### Example 2: Execute Action Tool - Route to Project
 ```json
 {{
     "data_sufficient": true,
     "missing_data": [],
-    "reasoning": "User is clearly reporting a bug: 'The export button doesn't work, I keep getting an error'. We have sufficient context (what feature, what problem). Plan has suggested the match_and_link_conversation_to_ticket action tool with proper parameters. This matches the user's intent perfectly - we should execute it to link this conversation to existing bug reports.",
-    "confidence": 0.9,
+    "reasoning": "User Dave is asking about onboarding access delays for 'Fact Checker/Auditor' project. From get_user_jobs results, I found job_AAABmlH2Od-y-xuSvJpCVKNE with project_id 'proj_AAABme_BzEmPPUa8AUJHb5eO' for 'Project Pulse' (Fact Checker and Auditor role). Contract accepted on 2025-11-05, user waiting for onboarding access. This is a pre-start onboarding issue that should be routed to the client team.",
+    "confidence": 0.95,
     "next_action": "execute_action",
     "escalation_reason": null,
     "action_decision": {{
-        "action_tool_name": "match_and_link_conversation_to_ticket",
-        "reasoning": "User is reporting a bug with clear symptoms, and Plan has suggested this action tool with proper parameters. Executing now will ensure tracking and engineering follow-up."
-    }}
-}}
-```
-        "parameters": {{}},
-        "reasoning": "User is reporting a specific bug (export button not working). This action will match their report to existing bug tickets and link this conversation appropriately for tracking."
+        "action_tool_name": "route_conversation_to_project_client",
+        "reasoning": "User has clear onboarding access issue for identified project. Extracted project_id from job data. Routing to client team will enable them to provide access.",
+        "parameters": {{
+            "project_id": "proj_AAABme_BzEmPPUa8AUJHb5eO"
+        }}
     }}
 }}
 ```
