@@ -187,31 +187,6 @@ def procedure_node(state: State) -> State:
                 relevance_score=relevance_score
             )
             print(f"✅ Selected procedure: {selected_procedure.title or selected_procedure.id}")
-
-            
-            # Debug: Dump selected procedure to file
-            import json
-            from pathlib import Path
-            import time
-            
-            debug_dir = Path(__file__).parents[3] / "debug_prompts"
-            debug_dir.mkdir(exist_ok=True)
-            
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            dump_file = debug_dir / f"selected_procedure_{timestamp}.json"
-            
-            with open(dump_file, "w") as f:
-                json.dump({
-                    "selected_procedure": selected_procedure.model_dump(),
-                    "raw_select_endpoint_data": proc_data,
-                    "content_length": len(content),
-                    "search_result_used_for_score": {
-                        "index": evaluation.selected_procedure_index,
-                        "relevance_score": relevance_score
-                    } if 0 <= evaluation.selected_procedure_index < len(rag_results) else None
-                }, f, indent=2)
-            
-            print(f"   📝 Selected procedure dumped to: {dump_file}")
             
             # Store selected procedure at root level
             state["selected_procedure"] = selected_procedure.model_dump()
@@ -631,27 +606,6 @@ def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: in
         results_data = data.get("results", [])
         
         print(f"✅ Retrieved {len(results_data)} results from search endpoint")
-        
-        # Debug: print first result structure and dump all results to file
-        if results_data:
-            print(f"📋 Sample result structure: {list(results_data[0].keys())}")
-            print(f"   First result: {results_data[0]}")
-            
-            # Dump all results to debug file
-            import json
-            from pathlib import Path
-            import time
-            
-            debug_dir = Path(__file__).parents[3] / "debug_prompts"
-            debug_dir.mkdir(exist_ok=True)
-            
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            dump_file = debug_dir / f"procedure_search_results_{timestamp}.json"
-            
-            with open(dump_file, "w") as f:
-                json.dump(results_data, f, indent=2)
-            
-            print(f"   📝 Full search results dumped to: {dump_file}")
         
         # Parse results into ProcedureResult objects
         results = []
