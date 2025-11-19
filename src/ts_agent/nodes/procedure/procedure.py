@@ -137,16 +137,81 @@ def procedure_node(state: State) -> State:
         
         # Step 4: Store selected procedure if match found
         selected_procedure = None
-        if evaluation.is_match and 0 <= evaluation.selected_procedure_index < len(rag_results):
-            selected_result = rag_results[evaluation.selected_procedure_index]
+        if evaluation.is_match and evaluation.selected_procedure_data:
+            # Use the full procedure data from the select endpoint
+            proc_data = evaluation.selected_procedure_data
+            
+            # Build content from the full procedure data
+            content_parts = []
+            
+            if "description" in proc_data and proc_data["description"]:
+                content_parts.append(f"Description: {proc_data['description']}")
+            
+            if "category" in proc_data and proc_data["category"]:
+                content_parts.append(f"Category: {proc_data['category']}")
+            
+            if "tools_required" in proc_data and proc_data["tools_required"]:
+                tools_str = ", ".join(proc_data["tools_required"])
+                content_parts.append(f"\nTools Required: {tools_str}")
+            
+            if "steps" in proc_data and proc_data["steps"]:
+                content_parts.append("\nSteps:")
+                for i, step in enumerate(proc_data["steps"], 1):
+                    content_parts.append(f"{i}. {step}")
+            
+            if "notes" in proc_data and proc_data["notes"]:
+                content_parts.append("\nNotes:")
+                if isinstance(proc_data["notes"], list):
+                    for note in proc_data["notes"]:
+                        content_parts.append(f"- {note}")
+                else:
+                    content_parts.append(f"\n{proc_data['notes']}")
+            
+            content = "\n".join(content_parts) if content_parts else ""
+            
+            # Get relevance score from search results if available
+            relevance_score = None
+            if 0 <= evaluation.selected_procedure_index < len(rag_results):
+                relevance_score = rag_results[evaluation.selected_procedure_index].relevance_score
+            
+            # Get procedure ID
+            proc_id = proc_data.get("id") or proc_data.get("procedure_id")
+            if isinstance(proc_id, int):
+                proc_id = str(proc_id)
+            
             selected_procedure = SelectedProcedure(
-                id=selected_result.id,
-                title=selected_result.title,
-                content=selected_result.content,
+                id=proc_id,
+                title=proc_data.get("title"),
+                content=content,
                 reasoning=evaluation.reasoning,
-                relevance_score=selected_result.relevance_score
+                relevance_score=relevance_score
             )
             print(f"✅ Selected procedure: {selected_procedure.title or selected_procedure.id}")
+
+            
+            # Debug: Dump selected procedure to file
+            import json
+            from pathlib import Path
+            import time
+            
+            debug_dir = Path(__file__).parents[3] / "debug_prompts"
+            debug_dir.mkdir(exist_ok=True)
+            
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            dump_file = debug_dir / f"selected_procedure_{timestamp}.json"
+            
+            with open(dump_file, "w") as f:
+                json.dump({
+                    "selected_procedure": selected_procedure.model_dump(),
+                    "raw_select_endpoint_data": proc_data,
+                    "content_length": len(content),
+                    "search_result_used_for_score": {
+                        "index": evaluation.selected_procedure_index,
+                        "relevance_score": relevance_score
+                    } if 0 <= evaluation.selected_procedure_index < len(rag_results) else None
+                }, f, indent=2)
+            
+            print(f"   📝 Selected procedure dumped to: {dump_file}")
             
             # Store selected procedure at root level
             state["selected_procedure"] = selected_procedure.model_dump()
@@ -263,6 +328,12 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
     # Procedure selected - check which tools are authorized
     procedure_content = selected_procedure.content.lower() if selected_procedure.content else ""
     
+    # Debug: Log procedure content for troubleshooting
+    print(f"\n🔍 DEBUG: Checking procedure content for tool authorization:")
+    print(f"   Procedure: {selected_procedure.title or selected_procedure.id}")
+    print(f"   Content length: {len(procedure_content)} chars")
+    print(f"   Content preview (first 200 chars): {procedure_content[:200]}...")
+    
     # Track which tools to remove
     tools_to_remove = []
     
@@ -273,10 +344,19 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
             for search_term in config["search_terms"]
         )
         
+        # Debug: Log search results
+        print(f"\n   Checking '{tool_name}':")
+        for search_term in config["search_terms"]:
+            found = search_term.lower() in procedure_content
+            print(f"      '{search_term}': {'✓ FOUND' if found else '✗ not found'}")
+        
         if not is_authorized:
             tools_to_remove.append(tool_name)
-            print(f"🔒 Filtering out '{tool_name}': not mentioned in procedure")
+            print(f"   🔒 Result: FILTERING OUT (not mentioned in procedure)")
             print(f"   Reason: {config['reason']}")
+        else:
+            print(f"   ✅ Result: AUTHORIZED (found in procedure)")
+
     
     # Remove unauthorized tools from available_tools
     if tools_to_remove:
@@ -539,7 +619,8 @@ def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: in
         payload = {
             "query": query,
             "top_k": top_k,
-            "min_score": 0.3
+            "min_score": 0.3,
+            "status": "all"
         }
         
         print(f"📡 Calling MCP search endpoint: POST {url}")
@@ -551,10 +632,26 @@ def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: in
         
         print(f"✅ Retrieved {len(results_data)} results from search endpoint")
         
-        # Debug: print first result structure
+        # Debug: print first result structure and dump all results to file
         if results_data:
             print(f"📋 Sample result structure: {list(results_data[0].keys())}")
             print(f"   First result: {results_data[0]}")
+            
+            # Dump all results to debug file
+            import json
+            from pathlib import Path
+            import time
+            
+            debug_dir = Path(__file__).parents[3] / "debug_prompts"
+            debug_dir.mkdir(exist_ok=True)
+            
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            dump_file = debug_dir / f"procedure_search_results_{timestamp}.json"
+            
+            with open(dump_file, "w") as f:
+                json.dump(results_data, f, indent=2)
+            
+            print(f"   📝 Full search results dumped to: {dump_file}")
         
         # Parse results into ProcedureResult objects
         results = []
@@ -714,13 +811,15 @@ def _evaluate_procedures(
             return ProcedureEvaluation(
                 is_match=True,
                 selected_procedure_index=selected_index,
-                reasoning=reasoning
+                reasoning=reasoning,
+                selected_procedure_data=selected_procedure_data  # Include full data from select endpoint
             )
         else:
             return ProcedureEvaluation(
                 is_match=False,
                 selected_procedure_index=-1,
-                reasoning=reasoning
+                reasoning=reasoning,
+                selected_procedure_data=None
             )
         
     except Exception as e:
@@ -729,7 +828,8 @@ def _evaluate_procedures(
         return ProcedureEvaluation(
             is_match=False,
             selected_procedure_index=-1,
-            reasoning=f"Procedure evaluation failed: {str(e)}"
+            reasoning=f"Procedure evaluation failed: {str(e)}",
+            selected_procedure_data=None
         )
 
 

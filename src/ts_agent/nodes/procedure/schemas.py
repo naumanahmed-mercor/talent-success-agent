@@ -17,6 +17,7 @@ class ProcedureEvaluation(BaseModel):
     is_match: bool = Field(..., description="Whether any procedure perfectly matches the scenario")
     selected_procedure_index: int = Field(-1, description="Index of the selected procedure (0-based), or -1 if none")
     reasoning: str = Field(..., description="Detailed reasoning for selection or rejection")
+    selected_procedure_data: Optional[Dict[str, Any]] = Field(None, description="Full procedure data from select endpoint")
 
 
 class ProcedureResult(BaseModel):
