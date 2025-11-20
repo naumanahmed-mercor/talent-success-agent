@@ -108,6 +108,12 @@ def procedure_node(state: State) -> State:
                 )
                 state["procedure_node"] = procedure_data.model_dump()
                 
+                # Set custom attributes on Intercom conversation
+                _set_procedure_custom_attributes(
+                    state=state,
+                    selected_procedure=selected_procedure
+                )
+                
                 return state
             else:
                 print(f"❌ Procedure with ID {procedure_id} not found - continuing with normal search")
@@ -233,6 +239,12 @@ def procedure_node(state: State) -> State:
             evaluation_reasoning=evaluation.reasoning
         )
         
+        # Set custom attributes on Intercom conversation
+        _set_procedure_custom_attributes(
+            state=state,
+            selected_procedure=selected_procedure
+        )
+        
     except Exception as e:
         print(f"❌ Failed to retrieve procedures: {e}")
         error_msg = f"Procedure retrieval failed: {str(e)}"
@@ -253,6 +265,9 @@ def procedure_node(state: State) -> State:
         
         # Filter out procedure-specific tools when procedure retrieval fails
         _filter_procedure_specific_tools(state, None)
+        
+        # Set custom attributes to indicate no procedure was used
+        _set_procedure_custom_attributes(state=state, selected_procedure=None)
         
         # Don't set error in state - this is a non-critical failure
         # The agent can continue without procedures
@@ -844,4 +859,62 @@ def _log_procedure_selection_to_api(
     except Exception as e:
         print(f"⚠️  Failed to log procedure to API: {e}")
         # Don't fail the procedure node if logging fails
+
+
+def _set_procedure_custom_attributes(
+    state: State,
+    selected_procedure: Optional[SelectedProcedure]
+) -> None:
+    """
+    Set custom attributes on the Intercom conversation for procedure tracking.
+    
+    Sets two custom attributes:
+    - "Procedure Used": boolean indicating if a procedure was used
+    - "Procedure Name": text with procedure title (empty string if not used)
+    
+    Args:
+        state: Current state with conversation_id
+        selected_procedure: The selected procedure (if any)
+    """
+    try:
+        conversation_id = state.get("conversation_id")
+        if not conversation_id:
+            print("⚠️  Cannot set procedure attributes: missing conversation_id")
+            return
+        
+        # Get Intercom API key
+        intercom_api_key = os.getenv("INTERCOM_API_KEY")
+        if not intercom_api_key:
+            print("⚠️  Cannot set procedure attributes: INTERCOM_API_KEY not found")
+            return
+        
+        # Initialize Intercom client with dry_run from state
+        dry_run = state.get("dry_run", False)
+        intercom_client = IntercomClient(intercom_api_key, dry_run=dry_run)
+        
+        # Determine attribute values
+        procedure_used = selected_procedure is not None
+        procedure_name = selected_procedure.title if selected_procedure else ""
+        
+        # Set "Procedure Used" attribute
+        print(f"📝 Setting 'Procedure Used' = {procedure_used}")
+        intercom_client.update_conversation_custom_attribute(
+            conversation_id=conversation_id,
+            attribute_name="Procedure Used",
+            attribute_value=procedure_used
+        )
+        
+        # Set "Procedure Name" attribute
+        print(f"📝 Setting 'Procedure Name' = '{procedure_name}'")
+        intercom_client.update_conversation_custom_attribute(
+            conversation_id=conversation_id,
+            attribute_name="Procedure Name",
+            attribute_value=procedure_name
+        )
+        
+        print("✅ Procedure custom attributes set successfully")
+        
+    except Exception as e:
+        print(f"⚠️  Failed to set procedure custom attributes: {e}")
+        # Don't fail the procedure node if attribute setting fails
 
