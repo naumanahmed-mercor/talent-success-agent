@@ -72,7 +72,7 @@ def _validate_and_sanitize_plan(
         
         # Check if this is an action tool (skip parameter validation)
         tool_type = tool_schema.get("tool_type", ToolType.GATHER.value)
-        is_action_tool = tool_type in [ToolType.INTERNAL_ACTION.value, ToolType.EXTERNAL_ACTION.value]
+        is_action_tool = tool_type == ToolType.ACTION.value
         
         if is_action_tool:
             # Action tools skip validation - Coverage will generate parameters
@@ -306,7 +306,7 @@ def plan_node(state: State) -> State:
         for tool_call in validated_plan.tool_calls:
             tool_type = tools_type_map.get(tool_call.tool_name, ToolType.GATHER.value)
             
-            if tool_type in [ToolType.INTERNAL_ACTION.value, ToolType.EXTERNAL_ACTION.value]:
+            if tool_type == ToolType.ACTION.value:
                 action_tool_calls.append(tool_call)
             else:
                 gather_tool_calls.append(tool_call)

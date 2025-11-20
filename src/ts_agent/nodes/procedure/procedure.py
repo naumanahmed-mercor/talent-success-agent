@@ -90,6 +90,9 @@ def procedure_node(state: State) -> State:
                 # Store selected procedure at root level
                 state["selected_procedure"] = selected_procedure.model_dump()
                 
+                # Filter available_tools based on procedure-specific tool requirements
+                _filter_procedure_specific_tools(state, selected_procedure)
+                
                 # Note: Skip logging to API for procedures selected by ID (test mode)
                 
                 # Store procedure data
@@ -275,7 +278,11 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
     PROCEDURE_SPECIFIC_TOOLS = {
         "route_conversation_to_project_client": {
             "reason": "Sensitive routing action - only available when procedure explicitly requires it",
-            "search_terms": ["route_conversation_to_project_client", "route to project", "route to client"]
+            "search_terms": ["route_conversation_to_project_client"]
+        },
+        "generate_reset_interview_link": {
+            "reason": "Sensitive action - only available when procedure explicitly requires it",
+            "search_terms": ["generate_reset_interview_link"]
         }
     }
     
@@ -594,8 +601,7 @@ def _fetch_procedures_from_mcp(query: str, mode: Optional[str] = None, top_k: in
         payload = {
             "query": query,
             "top_k": top_k,
-            "min_score": 0.3,
-            "status": "all"
+            "min_score": 0.3
         }
         
         print(f"📡 Calling MCP search endpoint: POST {url}")

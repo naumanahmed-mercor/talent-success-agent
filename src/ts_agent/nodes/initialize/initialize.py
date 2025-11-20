@@ -148,10 +148,8 @@ def initialize_node(state: State) -> State:
             # Currently, the MCP server doesn't return tool types yet, so we assign them manually
             for tool in available_tools:
                 tool_name = tool.get("name", "")
-                if tool_name == "match_and_link_conversation_to_ticket":
-                    tool["tool_type"] = ToolType.INTERNAL_ACTION.value
-                elif tool_name == "route_conversation_to_project_client":
-                    tool["tool_type"] = ToolType.INTERNAL_ACTION.value
+                if tool_name in ["match_and_link_conversation_to_ticket", "route_conversation_to_project_client", "generate_reset_interview_link"]:
+                    tool["tool_type"] = ToolType.ACTION.value
                 else:
                     tool["tool_type"] = ToolType.GATHER.value
             

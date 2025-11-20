@@ -162,7 +162,7 @@ def coverage_node(state: State) -> State:
                         try:
                             # Get tool schema and type
                             tool_schema = action_tool_from_plan.get("tool_schema")
-                            tool_type = action_tool_from_plan.get("tool_type", ToolType.INTERNAL_ACTION.value)
+                            tool_type = action_tool_from_plan.get("tool_type", ToolType.ACTION.value)
                             
                             if not tool_schema:
                                 print(f"⚠️  No tool schema found for '{action_tool_name}' - routing to respond")
