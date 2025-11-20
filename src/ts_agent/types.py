@@ -8,8 +8,7 @@ from typing_extensions import TypedDict
 class ToolType(str, Enum):
     """Types of tools available."""
     GATHER = "gather"
-    INTERNAL_ACTION = "internal_action"
-    EXTERNAL_ACTION = "external_action"
+    ACTION = "action"
 
 if TYPE_CHECKING:
     from ts_agent.nodes.plan.schemas import PlanData

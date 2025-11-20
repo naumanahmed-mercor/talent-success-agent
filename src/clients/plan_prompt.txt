@@ -25,9 +25,9 @@ Tools are categorized by type (shown in each tool definition):
 - **Examples**: get_user_applications, search_talent_docs, get_user_details
 - **Use when**: User asks questions, needs information, or you need data to respond
 
-### Action Tools (Type: "internal_action" or "external_action")
+### Action Tools (Type: "action")
 - **Purpose**: Perform operations with real-world side effects
-- **Examples**: match_and_link_conversation_to_ticket (links bug reports to tickets)
+- **Examples**: match_and_link_conversation_to_ticket (links bug reports to tickets), generate_reset_interview_link
 - **Use when**: 
   - User reports a bug → link to tracking system
   - User requests an action (create, update, link, etc.)

@@ -233,6 +233,7 @@ def _action_requires_review(tool_name: str, result_data: Any) -> bool:
     # These tools are considered safe or self-contained actions
     NO_ESCALATION_TOOLS = {
         "route_conversation_to_project_client",  # Just routes conversation, no data changes
+        "generate_reset_interview_link",  # Generates link for user, no escalation needed
     }
     
     # If tool is in the no-escalation list, never require review

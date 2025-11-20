@@ -31,7 +31,7 @@ def sanitize_tool_params(
         input_schema: Tool's input schema
         tool_name: Name of the tool
         injection_map: Dict mapping param names to trusted values (can be callables)
-        tool_type: Type of tool (ToolType.GATHER, ToolType.INTERNAL_ACTION, etc.)
+        tool_type: Type of tool (ToolType.GATHER, ToolType.ACTION, etc.)
                    If provided and is an action type, conversation_id and dry_run will be auto-injected
         
     Returns:
@@ -45,7 +45,7 @@ def sanitize_tool_params(
     required_params = input_schema.get("required", [])
     
     # For action tools, ensure conversation_id and dry_run are in injection map
-    is_action_tool = tool_type in [ToolType.INTERNAL_ACTION.value, ToolType.EXTERNAL_ACTION.value]
+    is_action_tool = tool_type == ToolType.ACTION.value
     if is_action_tool:
         # Auto-add conversation_id and dry_run to injection map if not present
         if "conversation_id" in properties and "conversation_id" not in injection_map:
