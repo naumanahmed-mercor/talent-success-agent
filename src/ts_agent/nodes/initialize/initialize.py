@@ -60,10 +60,18 @@ def initialize_node(state: State) -> State:
     mode = state.get("mode")
     is_test_mode = mode == "test"
     
-    # If test mode, set dry_run flag (unless explicitly overridden)
-    if is_test_mode and "dry_run" not in state:
-        state["dry_run"] = True
-        print(f"🧪 Test mode enabled - dry_run set to True")
+    # Check for DRY_RUN environment variable
+    dry_run_env = os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes")
+    
+    # Set dry_run flag if:
+    # 1. Test mode is enabled OR
+    # 2. DRY_RUN env var is set
+    # (only set if not explicitly provided in state)
+    if "dry_run" not in state:
+        if is_test_mode or dry_run_env:
+            state["dry_run"] = True
+            reason = "test mode" if is_test_mode else "DRY_RUN env var"
+            print(f"🧪 Dry run enabled - {reason} set dry_run to True")
     
     # Log procedure_id if provided (already in state from inputs)
     procedure_id = state.get("procedure_id")
