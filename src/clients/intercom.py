@@ -233,28 +233,30 @@ class IntercomClient:
 
         # Extract the initial message (source) of the conversation
         source = conversation.get("source", {})
-        if source and source.get("body"):
-            # Determine role based on author type
-            author = source.get("author", {})
-            author_type = author.get("type", "user")
-            
-            # Map Intercom author types to our agent roles
-            # Both "admin" and "bot" should be mapped to "assistant"
-            role = "assistant" if author_type in ["admin", "bot"] else "user"
-            
-            # Extract attachments if present
+        if source:
+            body = source.get("body", "")
             attachments = source.get("attachments", [])
             
-            message = {
-                "role": role,
-                "content": source.get("body", "")
-            }
-            
-            # Only add attachments field if there are attachments
-            if attachments:
-                message["attachments"] = attachments
-            
-            messages.append(message)
+            # Include message if it has either body content or attachments
+            if body or attachments:
+                # Determine role based on author type
+                author = source.get("author", {})
+                author_type = author.get("type", "user")
+                
+                # Map Intercom author types to our agent roles
+                # Both "admin" and "bot" should be mapped to "assistant"
+                role = "assistant" if author_type in ["admin", "bot"] else "user"
+                
+                message = {
+                    "role": role,
+                    "content": body
+                }
+                
+                # Only add attachments field if there are attachments
+                if attachments:
+                    message["attachments"] = attachments
+                
+                messages.append(message)
 
         # Extract conversation parts (subsequent messages)
         conversation_parts = conversation.get("conversation_parts", {}).get("conversation_parts", [])
@@ -309,9 +311,10 @@ class IntercomClient:
         author = source.get("author", {}) if source else {}
         author_type = author.get("type", "")
         
-        # Only extract if author is a user (not admin or bot)
-        if author_type != "user":
-            logger.debug(f"Source author is not a user (type: {author_type}), skipping name/email extraction")
+        # Only extract if author is a user or lead (not admin or bot)
+        # In Intercom, "lead" is a contact that hasn't been fully converted to a user yet
+        if author_type not in ["user", "lead"]:
+            logger.debug(f"Source author is not a user/lead (type: {author_type}), skipping name/email extraction")
             result["user_name"] = None
             result["user_email"] = None
             return result
