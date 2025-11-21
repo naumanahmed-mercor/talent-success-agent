@@ -98,11 +98,23 @@ def initialize_node(state: State) -> State:
                 print(f"📞 Fetching conversation data from Intercom: {conversation_id}")
                 conversation_data = intercom_client.get_conversation_data_for_agent(conversation_id)
                 
-                # Validate: Either messages or subject must be present
-                has_intercom_messages = conversation_data.get("messages") and len(conversation_data["messages"]) > 0
+                # Validate: Either messages (with content or attachments) or subject must be present
+                messages_list = conversation_data.get("messages", [])
+                has_intercom_messages = len(messages_list) > 0
+                
+                # Check if any message has content or attachments
+                has_valid_content = False
+                if has_intercom_messages:
+                    for msg in messages_list:
+                        msg_content = msg.get("content", "").strip()
+                        msg_attachments = msg.get("attachments", [])
+                        if msg_content or msg_attachments:
+                            has_valid_content = True
+                            break
+                
                 has_subject = conversation_data.get("subject") and conversation_data["subject"].strip()
                 
-                if not has_intercom_messages and not has_subject:
+                if not has_valid_content and not has_subject:
                     raise ValueError(f"No messages or subject found in conversation {conversation_id}")
                 
                 # Use Intercom data if not provided in state
