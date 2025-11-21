@@ -93,12 +93,17 @@ def procedure_node(state: State) -> State:
                 # Filter available_tools based on procedure-specific tool requirements
                 _filter_procedure_specific_tools(state, selected_procedure)
                 
-                # Note: Skip logging to API for procedures selected by ID (test mode)
+                # Log procedure selection to API (unless in test/dry_run mode)
+                _log_procedure_selection_to_api(
+                    state=state,
+                    selected_procedure=selected_procedure,
+                    query=f"Direct fetch by ID: {procedure_id}"
+                )
                 
                 # Store procedure data
                 procedure_data = ProcedureData(
                     query=f"Direct fetch by ID: {procedure_id}",
-                    query_reasoning="Procedure ID provided in test mode",
+                    query_reasoning="Procedure ID provided directly",
                     top_k_results=[selected_result],
                     selected_procedure=selected_procedure,
                     evaluation_reasoning=f"Procedure selected by ID: {procedure_id}",
@@ -822,8 +827,12 @@ def _log_procedure_selection_to_api(
         query: The search query used
     """
     try:
-        # Skip logging in dry run mode
-        if os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes"):
+        # Skip logging if in test mode or dry_run mode
+        is_test_mode = state.get("mode") == "test"
+        dry_run = state.get("dry_run", False)
+        
+        if is_test_mode or dry_run:
+            print(f"🧪 Skipping procedure logging (test_mode={is_test_mode}, dry_run={dry_run})")
             return
         
         conversation_id = state.get("conversation_id")
