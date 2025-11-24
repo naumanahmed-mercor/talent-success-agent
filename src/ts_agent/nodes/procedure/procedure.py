@@ -8,7 +8,7 @@ import requests
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from ts_agent.types import State
+from ts_agent.types import State, ToolType
 from ts_agent.llm import planner_llm
 from src.mcp.factory import create_mcp_client
 from src.clients.intercom import IntercomClient
@@ -206,6 +206,7 @@ def procedure_node(state: State) -> State:
             state["selected_procedure"] = selected_procedure.model_dump()
             
             # Filter available_tools based on procedure-specific tool requirements
+            # Also detect and store procedure-required action tools
             _filter_procedure_specific_tools(state, selected_procedure)
             
             # Log procedure selection to API
@@ -289,6 +290,10 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
     in the selected procedure content. If no procedure is selected, all procedure-specific
     tools are removed.
     
+    Also detects which procedure-specific ACTION tools are required by the procedure
+    and stores them in state['procedure_required_action_tools'] so they can be
+    automatically available to Coverage even if Plan doesn't include them.
+    
     Args:
         state: Current state with available_tools
         selected_procedure: The selected procedure with content to check (None if no procedure)
@@ -310,7 +315,7 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
     if not available_tools:
         return
     
-    # If no procedure, remove all procedure-specific tools
+    # If no procedure, remove all procedure-specific tools and clear required action tools
     if not selected_procedure:
         tool_names = list(PROCEDURE_SPECIFIC_TOOLS.keys())
         filtered_tools = [
@@ -325,6 +330,9 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
             print(f"🔒 No procedure selected: filtered out {removed_count} procedure-specific tool(s)")
             print(f"   Tools removed: {', '.join(tool_names)}")
             print(f"   Total tools available: {len(filtered_tools)}")
+        
+        # Clear procedure-required action tools
+        state["procedure_required_action_tools"] = []
         return
     
     # Procedure selected - check which tools are authorized
@@ -338,6 +346,7 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
     
     # Track which tools to remove
     tools_to_remove = []
+    procedure_required_action_tools = []
     
     for tool_name, config in PROCEDURE_SPECIFIC_TOOLS.items():
         # Check if any search term is in the procedure content
@@ -358,6 +367,12 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
             print(f"   Reason: {config['reason']}")
         else:
             print(f"   ✅ Result: AUTHORIZED (found in procedure)")
+            
+            # Check if this is an action tool and add to required list
+            tool_schema = next((t for t in available_tools if t.get("name") == tool_name), None)
+            if tool_schema and tool_schema.get("tool_type") == ToolType.ACTION.value:
+                procedure_required_action_tools.append(tool_name)
+                print(f"   ⚡ Added to procedure_required_action_tools (type: ACTION)")
 
     
     # Remove unauthorized tools from available_tools
@@ -372,6 +387,14 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
         
         print(f"🔧 Filtered {removed_count} procedure-specific tool(s) from available_tools")
         print(f"   Total tools available: {len(filtered_tools)}")
+    
+    # Store procedure-required action tools in state
+    state["procedure_required_action_tools"] = procedure_required_action_tools
+    if procedure_required_action_tools:
+        print(f"\n⚡ Procedure requires {len(procedure_required_action_tools)} action tool(s):")
+        for tool_name in procedure_required_action_tools:
+            print(f"   - {tool_name}")
+        print(f"   These will be automatically available to Coverage even if Plan doesn't include them.")
 
 
 def _generate_query(messages: List[Dict[str, Any]]) -> QueryGeneration:

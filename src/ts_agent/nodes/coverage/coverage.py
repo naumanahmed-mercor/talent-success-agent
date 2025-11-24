@@ -69,6 +69,26 @@ def coverage_node(state: State) -> State:
     # Get available tools from state to fetch full schemas
     available_tools = state.get("available_tools", [])
     
+    # Get procedure-required action tools (these are auto-added even if Plan didn't include them)
+    procedure_required_action_tools = state.get("procedure_required_action_tools", [])
+    
+    # If there are procedure-required action tools that Plan didn't include, add them
+    if procedure_required_action_tools:
+        print(f"\n⚡ Checking procedure-required action tools:")
+        planned_tool_names = [tc.get("tool_name") for tc in planned_action_tools]
+        
+        for required_tool_name in procedure_required_action_tools:
+            if required_tool_name not in planned_tool_names:
+                print(f"   📌 Auto-adding '{required_tool_name}' (required by procedure, missing from Plan)")
+                # Add the tool to planned_action_tools with empty parameters (Coverage will generate them)
+                planned_action_tools.append({
+                    "tool_name": required_tool_name,
+                    "parameters": {},
+                    "reasoning": f"Required by procedure (auto-added)"
+                })
+            else:
+                print(f"   ✓ '{required_tool_name}' already in Plan")
+    
     # Enrich planned action tools with full schemas from available_tools
     enriched_action_tools = _enrich_action_tools_with_schemas(planned_action_tools, available_tools)
     
