@@ -64,6 +64,7 @@ class State(TypedDict, total=False):
     # Procedure (Retrieved before plan-gather-coverage loop)
     selected_procedure: Optional[Dict[str, Any]]  # Selected procedure from RAG store (if any)
     procedure_node: Optional[Dict[str, Any]]  # Procedure node data (query, results, evaluation)
+    procedure_required_action_tools: Optional[List[str]]  # Action tools required by procedure (auto-added to coverage)
     
     # Data Storage (Independent of hops)
     tool_data: Optional[Dict[str, Any]]  # Individual tool results by tool name

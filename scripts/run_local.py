@@ -135,6 +135,9 @@ Examples:
   # Run with defaults (dry run, first message only)
   python scripts/run_local.py 215471618006513
 
+  # Run with specific procedure
+  python scripts/run_local.py 215471618006513 --procedure-id proc-1763728852027
+
   # Run with full conversation
   python scripts/run_local.py 215471618006513 --full-conversation
 
@@ -142,7 +145,7 @@ Examples:
   python scripts/run_local.py 215471618006513 --no-dry-run
 
   # Combine flags
-  python scripts/run_local.py 215471618006513 --full-conversation --no-dry-run
+  python scripts/run_local.py 215471618006513 --procedure-id proc-123 --full-conversation --no-dry-run
         """
     )
     
@@ -180,6 +183,11 @@ Examples:
     )
     
     parser.add_argument(
+        "--procedure-id",
+        help="Procedure ID to use directly (bypasses procedure search)"
+    )
+    
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("local_runs"),
@@ -204,6 +212,8 @@ Examples:
     print(f"📋 Conversation ID: {args.conversation_id}")
     print(f"🔄 Dry Run: {'✅ Enabled' if args.dry_run else '⚠️  DISABLED (will write to Intercom!)'}")
     print(f"📨 Mode: {'First message only' if args.first_message_only else 'Full conversation'}")
+    if args.procedure_id:
+        print(f"📚 Procedure ID: {args.procedure_id}")
     print(f"📁 Output Directory: {args.output_dir.absolute()}")
     print("="*80 + "\n")
     
@@ -246,6 +256,11 @@ Examples:
             "conversation_id": args.conversation_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        
+        # Add procedure_id if provided
+        if args.procedure_id:
+            initial_state["procedure_id"] = args.procedure_id
+            print(f"🔍 Using procedure ID: {args.procedure_id}\n")
         
         # Run the agent
         print(f"🤖 Running agent on conversation {args.conversation_id}...\n")
