@@ -129,6 +129,41 @@ def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         validation_response = ValidationResponse(**validation_result)
         validate_data.overall_passed = validation_response.overall_passed
         
+        # Check for forward_or_escalate intent
+        escalate_intent_detected = False
+        if "classification" in validation_result and "hits" in validation_result["classification"]:
+            for hit in validation_result["classification"]["hits"]:
+                if hit.get("intent_id") == "forward_or_escalate" and hit.get("confirmed", False):
+                    escalate_intent_detected = True
+                    print(f"⚠️  Detected forward_or_escalate intent (confidence: {hit.get('confidence', 0):.2f})")
+                    break
+        
+        # If escalate intent detected, check if we were already going to escalate
+        if escalate_intent_detected:
+            # Check if draft was already planning to escalate (ROUTE_TO_TEAM)
+            draft_data = state.get("draft", {})
+            was_planning_escalation = draft_data.get("response_type") == "ROUTE_TO_TEAM"
+            
+            if not was_planning_escalation:
+                # Draft wasn't planning to escalate, but validation detected it should
+                escalation_reason = "Validation detected that response indicates forwarding/escalation is required, but no escalation was planned"
+                validate_data.escalation_reason = escalation_reason
+                validate_data.next_action = "escalate"
+                state["next_node"] = "escalate"
+                state["escalation_reason"] = escalation_reason
+                
+                print(f"🚨 Forcing escalation: {escalation_reason}")
+                
+                # Append validate data early and return since we're overriding normal flow
+                if "validate" not in state or not isinstance(state["validate"], list):
+                    state["validate"] = []
+                state["validate"].append(validate_data.model_dump())
+                print(f"🎯 Validate node completed - next action: {validate_data.next_action}")
+                print(f"📊 Total validation attempts: {len(state['validate'])}")
+                return state
+            else:
+                print("✅ Escalation intent detected, and escalation was already planned - proceeding normally")
+        
         # Determine next action based on validation result
         if validation_response.overall_passed:
             validate_data.next_action = "response"

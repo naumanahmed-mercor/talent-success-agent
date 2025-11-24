@@ -107,12 +107,13 @@ def _determine_escalation_source(state: Dict[str, Any]) -> str:
     if draft_data and draft_data.get("response_type") == "ROUTE_TO_TEAM":
         return "draft"
     
-    # Check if validate node failed
+    # Check if validate node failed or forced escalation
     validate_data = state.get("validate", [])
     if validate_data and isinstance(validate_data, list) and len(validate_data) > 0:
         # Get the most recent validation attempt
         last_validation = validate_data[-1]
-        if not last_validation.get("overall_passed", True):
+        # Check if validation failed OR if validation forced escalation (e.g., detected forward_or_escalate intent)
+        if not last_validation.get("overall_passed", True) or last_validation.get("next_action") == "escalate":
             return "validate"
 
     # Check if coverage node escalated
