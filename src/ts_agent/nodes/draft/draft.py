@@ -8,7 +8,7 @@ import json
 from typing import Dict, Any, List
 from ts_agent.llm import drafter_llm
 from src.clients.prompts import get_prompt, PROMPT_NAMES
-from src.utils.prompts import build_conversation_and_user_context
+from src.utils.prompts import build_conversation_and_user_context, format_procedure_for_prompt
 from src.utils.debug import dump_prompt_to_file
 from .schemas import DraftData, ResponseType
 
@@ -64,6 +64,9 @@ def draft_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 # coverage_response is stored as a Pydantic model dict
                 coverage_reasoning = coverage_response.get("reasoning") if isinstance(coverage_response, dict) else None
         
+        # Get selected procedure from state
+        selected_procedure = state.get("selected_procedure")
+        
         # Generate response using LLM
         mode = state.get("mode")
         response = _generate_response(
@@ -73,7 +76,8 @@ def draft_node(state: Dict[str, Any]) -> Dict[str, Any]:
             docs_data,
             coverage_reasoning,
             validation_feedback,
-            mode
+            mode,
+            selected_procedure
         )
         
         generation_time = (time.time() - start_time) * 1000
@@ -130,7 +134,8 @@ def _generate_response(
     docs_data: Dict[str, Any],
     coverage_reasoning: str = None,
     validation_feedback: Dict[str, Any] = None,
-    mode: str = None
+    mode: str = None,
+    selected_procedure: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     Generate a response using LLM based on accumulated data.
@@ -143,6 +148,7 @@ def _generate_response(
         coverage_reasoning: Reasoning from latest coverage analysis (optional)
         validation_feedback: Validation feedback from a failed validation attempt (optional)
         mode: Execution mode (e.g., "splvin") to determine which prompt to use (optional)
+        selected_procedure: Selected procedure from procedure node (optional)
         
     Returns:
         Generated response with metadata
@@ -153,7 +159,7 @@ def _generate_response(
     context_data = _prepare_context_data(tool_data, docs_data)
     
     # Create system prompt with conversation context and user details
-    system_prompt = _create_system_prompt(conversation_history, user_details, context_data, coverage_reasoning, validation_feedback, mode)
+    system_prompt = _create_system_prompt(conversation_history, user_details, context_data, coverage_reasoning, validation_feedback, mode, selected_procedure)
     
     # Generate response with structured output
     from .schemas import DraftResponse
@@ -283,7 +289,7 @@ def _prepare_context_data(tool_data: Dict[str, Any], docs_data: Dict[str, Any]) 
     return context
 
 
-def _create_system_prompt(conversation_history: str, user_details: str, context_data: Dict[str, Any], coverage_reasoning: str = None, validation_feedback: Dict[str, Any] = None, mode: str = None) -> str:
+def _create_system_prompt(conversation_history: str, user_details: str, context_data: Dict[str, Any], coverage_reasoning: str = None, validation_feedback: Dict[str, Any] = None, mode: str = None, selected_procedure: Dict[str, Any] = None) -> str:
     """
     Create system prompt for response generation.
     
@@ -294,6 +300,7 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         coverage_reasoning: Reasoning from latest coverage analysis (optional)
         validation_feedback: Validation feedback from a failed validation attempt (optional)
         mode: Execution mode (e.g., "splvin") to determine which prompt to use (optional)
+        selected_procedure: Selected procedure from procedure node (optional)
         
     Returns:
         System prompt string
@@ -331,6 +338,9 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         docs_content += "\n\nDOCUMENTATION DATA:\n"
         docs_content += json.dumps(context_data["docs_data"], indent=2)
     
+    # Format procedure if available
+    procedure_text = format_procedure_for_prompt(selected_procedure)
+    
     # Select prompt based on mode
     if mode == "splvin":
         prompt_name = PROMPT_NAMES["DRAFT_NODE_SLACK"]
@@ -349,7 +359,8 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
     prompt = prompt_template.format(
         conversation_history=conversation_history,
         user_details=user_details,
-        data_summary=full_data_summary
+        data_summary=full_data_summary,
+        procedure=procedure_text
     )
     
     # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
@@ -357,6 +368,7 @@ def _create_system_prompt(conversation_history: str, user_details: str, context_
         "Prompt Length": f"{len(prompt)} characters",
         "Has Validation Feedback": bool(validation_feedback),
         "Has Coverage Reasoning": bool(coverage_reasoning),
+        "Has Procedure": bool(selected_procedure),
         "Tool Data Count": len(context_data.get('tool_data', {})),
         "Docs Data Count": len(context_data.get('docs_data', {})),
         "Documentation Content Count": len(context_data.get('documentation_content', []))
