@@ -18,6 +18,8 @@ You may sometimes receive **a large amount of extra or tangential information** 
 Do **not** include everything you see — focus only on what directly answers the user's question.  
 Keep your reply targeted, relevant, and free of unnecessary details.
 
+{procedure}
+
 ---
 
 ## YOUR GOAL
