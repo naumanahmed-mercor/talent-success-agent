@@ -9,7 +9,8 @@ from ts_agent.llm import planner_llm
 from src.clients.prompts import get_prompt, PROMPT_NAMES
 from src.utils.prompts import build_conversation_and_user_context, format_procedure_for_prompt
 from src.utils.debug import dump_prompt_to_file, dump_response_to_file
-from jsonschema import validate, ValidationError
+from jsonschema import validate, ValidationError as JSONSchemaValidationError
+from pydantic import ValidationError as PydanticValidationError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,7 @@ def _validate_and_sanitize_plan(
         if input_schema and input_schema.get("properties"):
             try:
                 validate(instance=sanitized_params, schema=input_schema)
-            except ValidationError as e:
+            except JSONSchemaValidationError as e:
                 error_msg = f"Parameter validation failed: {e.message}"
                 logger.warning(f"⚠️  Tool call {i} ({tool_name}): {error_msg}")
                 print(f"   ⚠️  Invalid params for {tool_name}: {e.message}")
@@ -362,7 +363,7 @@ def _generate_plan(
     validation_errors: List[Dict[str, Any]] = None
 ) -> Plan:
     """
-    Generate an execution plan using LLM.
+    Generate an execution plan using LLM with retry logic for malformed responses.
     
     Args:
         request: Plan request with conversation history and context
@@ -373,95 +374,134 @@ def _generate_plan(
     Returns:
         Generated execution plan
     """
+    max_pydantic_retries = 2
+    pydantic_error_text = None
     
-    # Create context-aware prompt for LLM
-    context_info = _format_context_for_prompt(request.context)
-    
-    # Build conversation history and user details (structured format)
-    # Get from context if available (passed from plan_node call)
-    conversation_history = request.context.get("conversation_history_formatted", "")
-    user_details = request.context.get("user_details_formatted", "")
-    
-    # Format procedure if available
-    procedure_text = format_procedure_for_prompt(selected_procedure)
-    
-    # Format validation errors if this is a retry
-    validation_errors_text = _format_validation_errors(validation_errors, available_tools) if validation_errors else ""
-    
-    # Get prompt from LangSmith
-    prompt_template_text = get_prompt(PROMPT_NAMES["PLAN_NODE"])
-    
-    # Format the prompt with variables
-    formatted_tools = _format_tools_for_prompt(available_tools)
-    
-    # Inject validation errors into the prompt if present
-    if validation_errors_text:
-        # For retry: Skip available_tools to save tokens - we already show the schema in validation errors
-        prompt = prompt_template_text.format(
-            conversation_history=conversation_history,
-            user_details=user_details,
-            procedure=procedure_text,
-            context_info=context_info + "\n\n" + validation_errors_text,
-            available_tools="(Tool schemas omitted for retry - see validation errors above for required parameters)"
-        )
-    else:
-        # For first attempt: Include all available tools
-        prompt = prompt_template_text.format(
-            conversation_history=conversation_history,
-            user_details=user_details,
-            procedure=procedure_text,
-            context_info=context_info,
-            available_tools=formatted_tools
-        )
-    
-    # Log the full prompt for debugging (only to logger, not console)
-    logger.debug(f"Plan prompt length: {len(prompt)} characters")
-    if validation_errors:
-        logger.debug(f"Retry prompt with {len(validation_errors)} validation errors")
-    
-    # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
-    metadata = {
-        "Prompt Length": f"{len(prompt)} characters",
-        "Is Retry": bool(validation_errors),
-        "Has Procedure": bool(selected_procedure)
-    }
-    if validation_errors:
-        metadata["Validation Errors"] = len(validation_errors)
-    
-    dump_prompt_to_file(prompt, "plan", metadata=metadata)
+    for pydantic_attempt in range(max_pydantic_retries + 1):
+        # Create context-aware prompt for LLM
+        context_info = _format_context_for_prompt(request.context)
         
-    # Get LLM response with structured output
-    # Use function_calling method since Plan schema contains Dict[str, Any] 
-    # which is not supported by OpenAI's native structured output
-    llm = planner_llm()
-    llm_with_structure = llm.with_structured_output(Plan, method="function_calling")
-    plan = llm_with_structure.invoke(prompt)
-    
-    # Debug: Dump LLM response to file if DEBUG_PROMPTS env var is set
-    import time
-    response_data = {
-        "timestamp": time.strftime("%Y%m%d_%H%M%S"),
-        "is_retry": bool(validation_errors),
-        "reasoning": plan.reasoning,
-        "tool_calls": [
-            {
-                "tool_name": tc.tool_name,
-                "parameters": tc.parameters,
-                "reasoning": tc.reasoning
-            }
-            for tc in plan.tool_calls
-        ],
-        "metadata": {
-            "total_tool_calls": len(plan.tool_calls),
-            "prompt_length": len(prompt),
-            "has_procedure": bool(selected_procedure)
+        # Build conversation history and user details (structured format)
+        # Get from context if available (passed from plan_node call)
+        conversation_history = request.context.get("conversation_history_formatted", "")
+        user_details = request.context.get("user_details_formatted", "")
+        
+        # Format procedure if available
+        procedure_text = format_procedure_for_prompt(selected_procedure)
+        
+        # Format validation errors if this is a retry
+        validation_errors_text = _format_validation_errors(validation_errors, available_tools) if validation_errors else ""
+        
+        # Get prompt from LangSmith
+        prompt_template_text = get_prompt(PROMPT_NAMES["PLAN_NODE"])
+        
+        # Format the prompt with variables
+        formatted_tools = _format_tools_for_prompt(available_tools)
+        
+        # Build context info with any Pydantic errors
+        full_context_info = context_info
+        if pydantic_error_text:
+            full_context_info = context_info + "\n\n" + pydantic_error_text
+        if validation_errors_text:
+            full_context_info = full_context_info + "\n\n" + validation_errors_text
+        
+        # Inject validation errors into the prompt if present
+        if validation_errors_text or pydantic_error_text:
+            # For retry: Skip available_tools to save tokens - we already show the schema in validation errors
+            prompt = prompt_template_text.format(
+                conversation_history=conversation_history,
+                user_details=user_details,
+                procedure=procedure_text,
+                context_info=full_context_info,
+                available_tools="(Tool schemas omitted for retry - see validation errors above for required parameters)"
+            )
+        else:
+            # For first attempt: Include all available tools
+            prompt = prompt_template_text.format(
+                conversation_history=conversation_history,
+                user_details=user_details,
+                procedure=procedure_text,
+                context_info=full_context_info,
+                available_tools=formatted_tools
+            )
+        
+        # Log the full prompt for debugging (only to logger, not console)
+        logger.debug(f"Plan prompt length: {len(prompt)} characters")
+        if validation_errors:
+            logger.debug(f"Retry prompt with {len(validation_errors)} validation errors")
+        if pydantic_error_text:
+            logger.debug(f"Pydantic retry attempt {pydantic_attempt + 1}/{max_pydantic_retries + 1}")
+        
+        # Debug: Dump full prompt to file if DEBUG_PROMPTS env var is set
+        metadata = {
+            "Prompt Length": f"{len(prompt)} characters",
+            "Is Retry": bool(validation_errors),
+            "Has Procedure": bool(selected_procedure),
+            "Pydantic Attempt": pydantic_attempt + 1
         }
-    }
-    
-    suffix = "_retry" if validation_errors else "_response"
-    dump_response_to_file(response_data, "plan", suffix=suffix)
-    
-    return plan
+        if validation_errors:
+            metadata["Validation Errors"] = len(validation_errors)
+        
+        dump_prompt_to_file(prompt, "plan", metadata=metadata)
+            
+        # Get LLM response with structured output
+        # Use function_calling method since Plan schema contains Dict[str, Any] 
+        # which is not supported by OpenAI's native structured output
+        llm = planner_llm()
+        llm_with_structure = llm.with_structured_output(Plan, method="function_calling")
+        
+        try:
+            plan = llm_with_structure.invoke(prompt)
+            
+            # Success! Debug: Dump LLM response to file if DEBUG_PROMPTS env var is set
+            import time
+            response_data = {
+                "timestamp": time.strftime("%Y%m%d_%H%M%S"),
+                "is_retry": bool(validation_errors),
+                "pydantic_attempt": pydantic_attempt + 1,
+                "reasoning": plan.reasoning,
+                "tool_calls": [
+                    {
+                        "tool_name": tc.tool_name,
+                        "parameters": tc.parameters,
+                        "reasoning": tc.reasoning
+                    }
+                    for tc in plan.tool_calls
+                ],
+                "metadata": {
+                    "total_tool_calls": len(plan.tool_calls),
+                    "prompt_length": len(prompt),
+                    "has_procedure": bool(selected_procedure)
+                }
+            }
+            
+            suffix = "_retry" if validation_errors else "_response"
+            if pydantic_attempt > 0:
+                suffix += f"_pydantic_retry{pydantic_attempt}"
+            dump_response_to_file(response_data, "plan", suffix=suffix)
+            
+            if pydantic_attempt > 0:
+                logger.info(f"✅ LLM response valid after {pydantic_attempt} Pydantic retry attempts")
+                print(f"   ✅ LLM generated valid response after {pydantic_attempt} Pydantic retry(s)")
+            
+            return plan
+            
+        except PydanticValidationError as e:
+            # LLM returned malformed data (missing fields, wrong types, etc.)
+            error_details = _format_pydantic_errors(e)
+            logger.warning(f"⚠️  LLM returned malformed response (attempt {pydantic_attempt + 1}/{max_pydantic_retries + 1}): {error_details}")
+            print(f"   ⚠️  LLM response validation failed: {error_details}")
+            
+            # If this was the last attempt, re-raise the error
+            if pydantic_attempt >= max_pydantic_retries:
+                logger.error(f"❌ LLM response still malformed after {max_pydantic_retries} retries. Giving up.")
+                print(f"   ❌ LLM unable to generate valid response after {max_pydantic_retries + 1} attempts")
+                raise
+            
+            # Otherwise, prepare error feedback for retry
+            pydantic_error_text = _format_pydantic_error_for_prompt(e)
+            print(f"   🔄 Retrying LLM call with error feedback...")
+            # Continue to next iteration of loop
 
 
 def _format_tools_for_prompt(tools: List[Dict[str, Any]]) -> str:
@@ -582,6 +622,96 @@ def _format_validation_errors(
         '    }',
         '  ]',
         "}",
+        "=" * 80,
+        ""
+    ])
+    
+    return "\n".join(error_lines)
+
+
+def _format_pydantic_errors(validation_error: PydanticValidationError) -> str:
+    """
+    Format Pydantic validation errors into a simple string for logging.
+    
+    Args:
+        validation_error: Pydantic ValidationError
+        
+    Returns:
+        Human-readable error summary
+    """
+    errors = validation_error.errors()
+    error_messages = []
+    
+    for err in errors:
+        location = " -> ".join(str(loc) for loc in err['loc'])
+        error_type = err['type']
+        message = err['msg']
+        error_messages.append(f"{location}: {message} (type={error_type})")
+    
+    return "; ".join(error_messages)
+
+
+def _format_pydantic_error_for_prompt(validation_error: PydanticValidationError) -> str:
+    """
+    Format Pydantic validation errors for the LLM prompt to help it fix the issues.
+    
+    Args:
+        validation_error: Pydantic ValidationError
+        
+    Returns:
+        Formatted string with error details and instructions
+    """
+    errors = validation_error.errors()
+    
+    error_lines = [
+        "=" * 80,
+        "🚨 RESPONSE FORMAT ERROR",
+        "=" * 80,
+        "Your previous response had formatting errors and could not be parsed.",
+        "Please fix the following issues:\n"
+    ]
+    
+    for i, err in enumerate(errors, 1):
+        location = " -> ".join(str(loc) for loc in err['loc'])
+        error_type = err['type']
+        message = err['msg']
+        input_value = err.get('input', 'N/A')
+        
+        error_lines.append(f"ERROR {i}:")
+        error_lines.append(f"  Location: {location}")
+        error_lines.append(f"  Problem: {message}")
+        error_lines.append(f"  Error Type: {error_type}")
+        
+        if error_type == 'missing':
+            error_lines.append(f"  ❌ The field '{err['loc'][-1]}' is REQUIRED but was not provided")
+        elif error_type == 'string_type':
+            error_lines.append(f"  ❌ Expected a string but got: {type(input_value).__name__}")
+        elif error_type == 'list_type':
+            error_lines.append(f"  ❌ Expected a list but got: {type(input_value).__name__}")
+        elif error_type == 'dict_type':
+            error_lines.append(f"  ❌ Expected a dictionary but got: {type(input_value).__name__}")
+        
+        error_lines.append("")
+    
+    error_lines.extend([
+        "=" * 80,
+        "REQUIRED STRUCTURE:",
+        "{",
+        '  "reasoning": "string - overall plan reasoning",',
+        '  "tool_calls": [',
+        '    {',
+        '      "tool_name": "string - name of tool",',
+        '      "parameters": { ... },  // dict - tool parameters',
+        '      "reasoning": "string - why this tool is needed"',
+        '    }',
+        '  ]',
+        "}",
+        "",
+        "⚠️  IMPORTANT:",
+        "- ALL fields marked as 'string' must be actual strings, not missing",
+        "- 'tool_calls' must be a list, even if empty",
+        "- Each tool call MUST have 'tool_name', 'parameters', and 'reasoning'",
+        "- 'parameters' must be a dict/object, use {} if no parameters needed",
         "=" * 80,
         ""
     ])
