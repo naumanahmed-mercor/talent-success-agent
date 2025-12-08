@@ -3,6 +3,7 @@ Utility functions for formatting prompts with conversation history and user deta
 """
 
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 
@@ -11,11 +12,11 @@ def format_conversation_history(messages: List[Dict[str, Any]], subject: Optiona
     Format conversation history for LLM prompts.
     
     Args:
-        messages: List of conversation messages with role, content, and optional attachments
+        messages: List of conversation messages with role, content, timestamp, and optional attachments
         subject: Optional conversation subject/title
         
     Returns:
-        Formatted conversation history string including attachment information
+        Formatted conversation history string including timestamps and attachment information
     """
     parts = []
     
@@ -29,7 +30,19 @@ def format_conversation_history(messages: List[Dict[str, Any]], subject: Optiona
         for i, message in enumerate(messages, 1):
             role = message.get("role", "unknown").title()
             content = message.get("content", "")
-            parts.append(f"{i}. {role}: {content}")
+            timestamp = message.get("timestamp")
+            
+            # Format timestamp if available
+            timestamp_str = ""
+            if timestamp:
+                try:
+                    dt = datetime.fromtimestamp(timestamp)
+                    timestamp_str = f" [{dt.strftime('%Y-%m-%d %H:%M:%S')}]"
+                except (ValueError, OSError):
+                    # Handle invalid timestamps gracefully
+                    pass
+            
+            parts.append(f"{i}. {role}{timestamp_str}: {content}")
             
             # Add attachment information if present
             attachments = message.get("attachments", [])
@@ -175,10 +188,10 @@ def convert_messages_to_langchain_with_vision(
     Convert conversation messages to LangChain message format with vision support.
     
     This function creates structured messages that allow the LLM to actually process
-    images via URLs, not just be aware of them.
+    images via URLs, not just be aware of them. Timestamps are prepended to message content.
     
     Args:
-        messages: List of conversation messages with role, content, and optional attachments
+        messages: List of conversation messages with role, content, timestamp, and optional attachments
         subject: Optional conversation subject to prepend
         user_name: Optional user name to prepend
         user_email: Optional user email to prepend
@@ -188,7 +201,7 @@ def convert_messages_to_langchain_with_vision(
         
     Example:
         >>> messages = [
-        ...     {"role": "user", "content": "Look at this", "attachments": [{"url": "...", "content_type": "image/png"}]}
+        ...     {"role": "user", "content": "Look at this", "timestamp": 1765181290, "attachments": [{"url": "...", "content_type": "image/png"}]}
         ... ]
         >>> lc_messages = convert_messages_to_langchain_with_vision(messages)
         >>> # Can now be used with: llm.invoke(lc_messages)
@@ -217,6 +230,17 @@ def convert_messages_to_langchain_with_vision(
         role = message.get("role", "user")
         content_text = message.get("content", "")
         attachments = message.get("attachments", [])
+        timestamp = message.get("timestamp")
+        
+        # Prepend timestamp to content if available
+        if timestamp:
+            try:
+                dt = datetime.fromtimestamp(timestamp)
+                timestamp_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+                content_text = f"[{timestamp_str}] {content_text}"
+            except (ValueError, OSError):
+                # Handle invalid timestamps gracefully
+                pass
         
         # Prepend context to first message
         if i == 0 and context_text:

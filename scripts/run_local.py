@@ -202,6 +202,9 @@ Examples:
     # Set dry run mode
     os.environ["DRY_RUN"] = "true" if args.dry_run else "false"
     
+    # Enable debug prompt dumping
+    os.environ["DEBUG_PROMPTS"] = "true"
+    
     # Create output directory
     args.output_dir.mkdir(exist_ok=True)
     
@@ -236,6 +239,7 @@ Examples:
         intercom_client = IntercomClient(intercom_api_key)
         
         # Optionally override conversation data for first message only mode
+        conv_data = None
         if args.first_message_only:
             print(f"📥 Fetching first user message from conversation {args.conversation_id}...")
             conv_data = get_first_user_message(args.conversation_id, intercom_client)
@@ -256,6 +260,15 @@ Examples:
             "conversation_id": args.conversation_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        
+        # Add conversation data if using first message only
+        if args.first_message_only and conv_data:
+            initial_state["messages"] = conv_data["messages"]
+            initial_state["user_details"] = {
+                "name": conv_data.get("user_name"),
+                "email": conv_data.get("user_email")
+            }
+            initial_state["subject"] = conv_data.get("subject")
         
         # Add procedure_id if provided
         if args.procedure_id:
