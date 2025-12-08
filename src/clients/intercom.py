@@ -176,14 +176,18 @@ class IntercomClient:
 
         Returns:
             Dictionary containing:
-            - messages: List of messages in agent format [{"role": "user|assistant", "content": "...", "attachments": [...]}]
-              Each message may optionally include an "attachments" field with a list of attachment objects:
-              - type: Attachment type (e.g., "upload")
-              - name: Filename
-              - url: Signed URL to access the attachment
-              - content_type: MIME type (e.g., "image/png")
-              - filesize: File size in bytes
-              - width/height: Dimensions for images
+            - messages: List of messages in agent format [{"role": "user|assistant", "content": "...", "timestamp": ..., "attachments": [...]}]
+              Each message includes:
+              - role: "user" or "assistant"
+              - content: Message text
+              - timestamp: Unix timestamp when message was created
+              - attachments (optional): List of attachment objects:
+                - type: Attachment type (e.g., "upload")
+                - name: Filename
+                - url: Signed URL to access the attachment
+                - content_type: MIME type (e.g., "image/png")
+                - filesize: File size in bytes
+                - width/height: Dimensions for images
             - user_email: User's email address (or None if not found)
             - user_name: User's name (or None if not found)
             - subject: Conversation subject/title (or None if empty/not found)
@@ -195,6 +199,7 @@ class IntercomClient:
                     {
                         "role": "user", 
                         "content": "I want to withdraw my application",
+                        "timestamp": 1765181290,
                         "attachments": [
                             {
                                 "type": "upload",
@@ -205,7 +210,7 @@ class IntercomClient:
                             }
                         ]
                     },
-                    {"role": "assistant", "content": "I can help with that..."}
+                    {"role": "assistant", "content": "I can help with that...", "timestamp": 1765181541}
                 ],
                 "user_email": "user@example.com",
                 "user_name": "John Doe",
@@ -232,6 +237,9 @@ class IntercomClient:
         messages = []
 
         # Extract the initial message (source) of the conversation
+        # Note: Source doesn't have created_at, so we use conversation's created_at
+        conversation_created_at = conversation.get("created_at")
+        
         source = conversation.get("source", {})
         if source:
             body = source.get("body", "")
@@ -249,7 +257,8 @@ class IntercomClient:
                 
                 message = {
                     "role": role,
-                    "content": body
+                    "content": body,
+                    "timestamp": conversation_created_at  # Use conversation created_at for source
                 }
                 
                 # Only add attachments field if there are attachments
@@ -286,7 +295,8 @@ class IntercomClient:
                 
                 message = {
                     "role": role,
-                    "content": body or ""  # Ensure content is never None
+                    "content": body or "",  # Ensure content is never None
+                    "timestamp": part.get("created_at")  # Extract timestamp from part
                 }
                 
                 # Only add attachments field if there are attachments

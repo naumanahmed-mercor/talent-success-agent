@@ -28,6 +28,7 @@ class Message(TypedDict, total=False):
     """Individual message in a conversation."""
     role: str  # "user" or "assistant"
     content: str
+    timestamp: Optional[int]  # Unix timestamp when message was created
 
 
 class UserDetails(TypedDict, total=False):
