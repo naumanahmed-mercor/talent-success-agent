@@ -308,6 +308,14 @@ def _filter_procedure_specific_tools(state: State, selected_procedure: Optional[
         "generate_reset_interview_link": {
             "reason": "Sensitive action - only available when procedure explicitly requires it",
             "search_terms": ["generate_reset_interview_link"]
+        },
+        "generate_reset_tax_document_link": {
+            "reason": "Sensitive action - only available when procedure explicitly requires it",
+            "search_terms": ["generate_reset_tax_document_link"]
+        },
+        "generate_reset_form_link": {
+            "reason": "Sensitive action - only available when procedure explicitly requires it",
+            "search_terms": ["generate_reset_form_link"]
         }
     }
     
