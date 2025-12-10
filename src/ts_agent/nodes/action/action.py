@@ -234,6 +234,8 @@ def _action_requires_review(tool_name: str, result_data: Any) -> bool:
     NO_ESCALATION_TOOLS = {
         "route_conversation_to_project_client",  # Just routes conversation, no data changes
         "generate_reset_interview_link",  # Generates link for user, no escalation needed
+        "generate_reset_tax_document_link",
+        "generate_reset_form_link",
     }
     
     # If tool is in the no-escalation list, never require review
